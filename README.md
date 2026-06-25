@@ -1,85 +1,120 @@
 # WSO2 API Catalogue Modernization Demo
 
-This repository contains an end-to-end WSO2 API Catalogue modernization demo.
+This repository contains an end-to-end WSO2 API catalogue modernization demo.
 
-It demonstrates how API teams can onboard APIs through a governed API-as-code process, using **WSO2 API Manager as the source of truth** and **WSO2 Integrator / Integrator as the operational health validation layer**.
+It demonstrates how API teams can move from a static spreadsheet-style API inventory to a governed API operating model using:
 
-The demo covers:
+* **WSO2 API Manager 4.7** as the API control plane, catalogue, lifecycle manager, gateway, subscription layer and source of truth.
+* **WSO2 Integrator / Micro Integrator 4.6** as the operational orchestration layer for scheduled health checks, contract validation, status normalization and integration APIs.
+* A lightweight **health-status-cache** as the read model for the catalogue UI, including latest status, history and SLA-style windows.
+* A thin **catalogue UI** that reads APIM-sourced metadata and MI-sourced cached health data without triggering live probes.
 
-* 5 mocked banking APIs implemented in JavaScript/Node.js.
-* WSO2 API Manager 4.7 for API lifecycle, catalogue, governance and gateway exposure.
-* APICTL projects for importing APIs into WSO2 API Manager.
-* API metadata and health strategy stored as API Manager custom properties.
-* WSO2 Integrator / Micro Integrator 4.6 executing tiered scheduled health checks generated from API Manager metadata.
-* A cache-backed catalogue UI that reads the latest known MI health result without triggering probes.
-* A CI/CD-style onboarding flow that validates API artifacts before importing them.
-* Progressive API onboarding:
-  * Deploy 3 APIs first.
-  * Deploy a 4th API later.
-  * Attempt to deploy a 5th API with missing metadata and fail.
-  * Fix the API metadata and deploy successfully.
-* Consumer-facing API health states: `GREEN`, `YELLOW`, `RED` and lifecycle-controlled statuses such as `DEPRECATED`.
+The demo is intentionally designed for conversations with customers that need to catalogue, govern and observe a heterogeneous API estate across AWS, Kubernetes, Azure, VMs, legacy backends and future WSO2-managed gateway runtimes.
 
 ---
 
-## Current architecture
+## What this demo proves
+
+The demo proves the following architecture pattern:
 
 ```text
-Developer Git repository
-   ↓
-API-as-code artifacts
-   ↓
-CI/CD-style onboarding scripts
-   ↓
-OpenAPI + APIM health metadata validation
-   ↓
+API teams
+  ↓
+Git / API-as-code artifacts
+  ↓
+Local APIOps validation
+  ↓
+Optional APIM governance dry run
+  ↓
 WSO2 API Manager 4.7
-   ↓
-Source of truth for API catalogue, lifecycle and health strategy
-   ↓
+  ↓
+Source of truth for API catalogue, lifecycle, metadata, governance and access
+  ↓
+Developer Portal + subscriptions + APIM Gateway invocation
+  ↓
 APIM-to-MI one-shot reconciliation
-   ↓
-Generated WSO2 Integrator artifacts
-   ↓
+  ↓
+Generated WSO2 Integrator health artifacts
+  ↓
 WSO2 Integrator / Micro Integrator 4.6
-   ↓
-Tiered scheduled health checks
-   ↓
+  ↓
+Tiered scheduled liveness and contract checks
+  ↓
 health-status-cache
-   ↓
-Catalogue UI
+  ↓
+Catalogue UI, SLA views and operational summaries
 ```
 
-The runtime responsibility split is:
+The key message is:
 
 ```text
-WSO2 API Manager
-  = source of truth for API metadata, lifecycle and health strategy
-
-APIM-to-MI sync script
-  = reads API Manager metadata and generates MI artifacts
-
-WSO2 Integrator / MI
-  = executes tiered scheduled health checks
-
-health-status-cache
-  = stores the latest known MI health reading per API
-
-Catalogue UI
-  = reads the latest known status only; it does not trigger probes
+WSO2 API Manager owns API governance and consumer access.
+WSO2 Integrator owns operational health orchestration and integration composition.
+The UI reads operational state; it never executes probes.
 ```
+
+---
+
+## Demo capabilities
+
+The repository demonstrates:
+
+* Five mocked banking APIs implemented in JavaScript/Node.js.
+* APICTL projects for importing APIs into WSO2 API Manager.
+* API metadata and health strategy stored as API Manager custom properties.
+* Local APIOps validation for mandatory catalogue and health metadata.
+* Optional APIM governance dry-run using `apictl import api --dry-run`.
+* WSO2 API Manager Publisher, Developer Portal and Gateway flow.
+* Developer Portal application creation, subscription, key generation and gateway invocation smoke test.
+* WSO2 Integrator scheduled health checks generated from APIM metadata.
+* Tier-based probe schedules: Tier 0, Tier 1, Tier 2 and Tier 3.
+* Consumer-facing statuses: `GREEN`, `YELLOW`, `RED`, `DEPRECATED` and `UNKNOWN`.
+* Separation between platform readiness, gateway readiness, backend liveness, payload contract status and SLA-style status.
+* Cache-backed catalogue status with latest readings, history, summaries and SLA-style calculations.
+* A WSO2 Integrator Customer 360 composite integration API.
+* Service Catalog metadata for publishing the Integrator service into APIM.
+* Optional OpenTelemetry Collector profile for observability demos.
+* Progressive API onboarding:
+  * onboard 3 APIs first;
+  * onboard a 4th API later;
+  * attempt to onboard a 5th API with missing metadata and fail;
+  * fix the metadata and onboard successfully.
+
+---
+
+## Runtime responsibility split
+
+| Responsibility | Component |
+| --- | --- |
+| API inventory source of truth | WSO2 API Manager |
+| API lifecycle | WSO2 API Manager Publisher |
+| API discovery | WSO2 API Manager Developer Portal and/or custom catalogue UI |
+| Subscriptions and application access | WSO2 API Manager Developer Portal |
+| Runtime API exposure | WSO2 API Gateway |
+| API metadata and health strategy | APIM custom properties in `api.yaml` |
+| Local metadata validation | `pipeline/scripts/enhanced-governance-check.js` |
+| APIM governance compliance check | `pipeline/scripts/apictl-governance-dry-run.sh` |
+| APIM-to-MI reconciliation | `pipeline/scripts/sync-mi-health-from-apim.js` |
+| Health probe execution | WSO2 Integrator / Micro Integrator scheduled tasks |
+| Contract validation | WSO2 Integrator generated sequences |
+| Latest operational state | `health-status-cache` |
+| History and SLA-style windows | `health-status-cache` |
+| UI read model | Catalogue UI via MI/cache endpoints |
+| Integration composition | WSO2 Integrator Customer 360 API |
+| Integration-to-APIM exposure | WSO2 Integrator Service Catalog metadata |
 
 ---
 
 ## Important behavior
 
-The current demo intentionally avoids having the UI trigger health checks.
+The UI intentionally does **not** trigger health checks.
 
 The UI reads only cached status:
 
 ```text
 Catalogue UI
   → /catalogue-status/v1/apis
+  → WSO2 Integrator status API
   → health-status-cache
   → latest known MI readings
 ```
@@ -88,13 +123,13 @@ The actual probes are executed only by WSO2 Integrator scheduled tasks:
 
 ```text
 MI scheduled task
-  → generated tier sequence
+  → generated tier orchestration sequence
   → generated per-API check sequence
   → mocked backend /health endpoint
   → health-status-cache
 ```
 
-Manual full-probe execution is disabled:
+Manual full-probe execution is disabled by design:
 
 ```text
 POST /health-registry/v1/probes/run
@@ -102,6 +137,23 @@ POST /health-registry/v1/probes/run
 ```
 
 This prevents browser refreshes, manual curl calls or old UI code from forcing all APIs to be checked at the same time.
+
+---
+
+## Platform health vs API health
+
+This demo separates these signals:
+
+| Signal | Meaning | Demo mechanism |
+| --- | --- | --- |
+| Platform readiness | APIM, MI and cache are reachable | `npm run platform:readiness` |
+| Gateway readiness | Gateway is ready for deployed APIs | APIM gateway readiness endpoint where applicable |
+| Backend liveness | Backend `/health` responds | MI scheduled liveness probe |
+| Contract health | Backend payload matches expected fields/body | MI generated validation logic |
+| Consumer-facing status | Simplified catalogue badge | `GREEN`, `YELLOW`, `RED`, etc. |
+| SLA-style status | Availability and latency over cached samples | `/cache/sla`, `/cache/sla/breaches` |
+
+This is intentional. A healthy APIM node does not guarantee that every API is deployed, that every backend is alive, or that the backend response is semantically correct.
 
 ---
 
@@ -117,10 +169,14 @@ This prevents browser refreshes, manual curl calls or old UI code from forcing a
 | WSO2 API Manager Publisher | API lifecycle and publishing | `https://localhost:9443/publisher` |
 | WSO2 API Manager Developer Portal | API discovery and subscription | `https://localhost:9443/devportal` |
 | WSO2 API Manager Carbon Console | Admin console | `https://localhost:9443/carbon` |
-| WSO2 Integrator Health Registry API | APIM-sourced registry metadata | `http://localhost:8290/health-registry/v1/apis` |
-| WSO2 Integrator Catalogue Status API | Last known cached status through MI | `http://localhost:8290/catalogue-status/v1/apis` |
-| Health Status Cache | Latest known MI readings | `http://localhost:6300/cache/results` |
+| WSO2 API Gateway | Managed API runtime endpoint | `https://localhost:8243` |
+| WSO2 Integrator Health Registry API | APIM-sourced health registry metadata | `http://localhost:8290/health-registry/v1/apis` |
+| WSO2 Integrator Catalogue Status API | Cached status exposed through MI | `http://localhost:8290/catalogue-status/v1/apis` |
+| WSO2 Integrator Platform Status API | MI-level platform status endpoint | `http://localhost:8290/platform-status/v1/health` |
+| WSO2 Integrator Customer 360 API | Composite integration API | `http://localhost:8290/customer-360/v1/customers/{customerId}` |
+| Health Status Cache | Latest status, history and SLA-style windows | `http://localhost:6300` |
 | Catalogue UI | Demo UI | `http://localhost:5174` |
+| Optional OpenTelemetry Collector | Local observability profile | `localhost:4317`, `localhost:4318` |
 
 Default credentials:
 
@@ -184,6 +240,8 @@ Use these instead:
 http://localhost:8290/health-registry/v1/apis
 http://localhost:8290/catalogue-status/v1/apis
 http://localhost:6300/cache/results
+http://localhost:6300/cache/history
+http://localhost:6300/cache/sla
 http://localhost:5174
 ```
 
@@ -208,10 +266,16 @@ http://localhost:5174
 │       ├── cards-api/
 │       └── loans-api/
 │
+├── governance/
+│   └── catalogue-governance-rules.json
+│
 ├── health-status-cache/
 │   ├── Dockerfile
 │   ├── package.json
 │   └── server.js
+│
+├── observability/
+│   └── otel-collector-config.yaml
 │
 ├── pipeline/
 │   └── scripts/
@@ -220,16 +284,28 @@ http://localhost:5174
 │       ├── deploy-cards-later-to-apim.sh
 │       ├── deploy-loans-later-to-apim.sh
 │       ├── sync-mi-health-from-apim.js
-│       └── watch-apim-mi-sync.sh
+│       ├── watch-apim-mi-sync.sh
+│       ├── enhanced-governance-check.js
+│       ├── apictl-governance-dry-run.sh
+│       ├── apim-platform-readiness.js
+│       └── devportal-subscribe-and-invoke.js
 │
 ├── ui/
 │
 ├── wso2-integrator/
 │   └── catalogue-health-mi/
-│       └── src/main/wso2mi/artifacts/
-│           ├── apis/
-│           ├── sequences/
-│           └── tasks/
+│       └── src/main/wso2mi/
+│           ├── artifacts/
+│           │   ├── apis/
+│           │   │   ├── catalogue_status_api.xml
+│           │   │   ├── customer_360_api.xml
+│           │   │   └── platform_status_api.xml
+│           │   ├── sequences/
+│           │   └── tasks/
+│           └── resources/
+│               └── service-catalog/
+│                   ├── customer_360_openapi.yaml
+│                   └── customer_360_service.yaml
 │
 ├── docker-compose.yml
 └── package.json
@@ -243,7 +319,7 @@ Each APICTL API project contains an `api.yaml`.
 
 The `api.yaml` contains APIM custom properties under `additionalProperties`.
 
-These properties define the health strategy that WSO2 Integrator will execute.
+These properties define the health strategy that WSO2 Integrator will execute after APIM-to-MI reconciliation.
 
 Example:
 
@@ -290,11 +366,42 @@ additionalProperties:
     display: true
 ```
 
+Recommended extended catalogue metadata:
+
+```yaml
+  - name: data_classification
+    value: "Confidential"
+    display: true
+  - name: regulatory_scope
+    value: "LGPD"
+    display: true
+  - name: support_channel
+    value: "teams://accounts-platform-support"
+    display: true
+  - name: repository_url
+    value: "https://github.com/example/accounts-api"
+    display: true
+  - name: runbook_url
+    value: "https://internal.example/runbooks/accounts-api"
+    display: true
+  - name: maintenance_window
+    value: "Saturday 01:00-03:00 BRT"
+    display: true
+  - name: retirement_date
+    value: ""
+    display: true
+  - name: gateway_type
+    value: "wso2-classic"
+    display: true
+```
+
 ---
 
-## Required health metadata
+## Required metadata
 
-The onboarding script validates that each API contains these properties:
+The local governance script validates required APIM custom properties before import.
+
+Required health metadata:
 
 ```text
 health_enabled
@@ -312,9 +419,41 @@ health_owner_team
 health_owner_email
 ```
 
-If an API is missing required health metadata, it is rejected before import.
+Recommended production governance rules:
 
-This demonstrates that incomplete operational metadata does not enter the governed API catalogue.
+| Rule | Blocking for demo |
+| --- | --- |
+| API has valid OpenAPI definition | Yes |
+| API has health strategy | Yes |
+| API has criticality | Yes |
+| API has owner team and email | Yes |
+| API has SLA target | Yes |
+| Tier 0 / Tier 1 APIs have liveness and payload validation | Yes |
+| Deprecated APIs have lifecycle/status handling | Recommended |
+| Production APIs have support channel and runbook | Recommended |
+| Production APIs have data classification | Recommended |
+
+If an API is missing required operational metadata, it is rejected before import.
+
+This demonstrates that incomplete APIs do not enter the governed API catalogue.
+
+---
+
+## Governance commands
+
+Run local governance validation against all APICTL projects:
+
+```bash
+npm run platform:governance:check
+```
+
+Run local validation plus APIM governance dry-run for `accounts-api`:
+
+```bash
+npm run platform:governance:dry-run:accounts
+```
+
+The local governance script validates demo-specific metadata. The APIM dry-run validates the API against governance policies configured in the target WSO2 API Manager environment.
 
 ---
 
@@ -339,10 +478,14 @@ Do not manually edit generated `check_*.xml`, `run_tier*.xml`, task files or `he
 
 The source of truth is API Manager. If API metadata changes, run a one-shot reconciliation.
 
-This file is manually maintained and should remain in place:
+These files are manually maintained and should remain in place:
 
 ```text
 wso2-integrator/catalogue-health-mi/src/main/wso2mi/artifacts/apis/catalogue_status_api.xml
+wso2-integrator/catalogue-health-mi/src/main/wso2mi/artifacts/apis/customer_360_api.xml
+wso2-integrator/catalogue-health-mi/src/main/wso2mi/artifacts/apis/platform_status_api.xml
+wso2-integrator/catalogue-health-mi/src/main/wso2mi/resources/service-catalog/customer_360_openapi.yaml
+wso2-integrator/catalogue-health-mi/src/main/wso2mi/resources/service-catalog/customer_360_service.yaml
 ```
 
 ---
@@ -361,6 +504,163 @@ The generated MI tasks use tier-based schedules:
 After an MI restart, the first checks may fire close together. This is normal.
 
 For timing validation, ignore the initial startup burst and observe the cache over several minutes.
+
+---
+
+## Health status model
+
+| Scenario | Consumer status | Meaning |
+| --- | --- | --- |
+| Health endpoint returns expected HTTP status and expected payload | `GREEN` | Backend is reachable and contract check passed |
+| Health endpoint returns HTTP 200 but payload is wrong | `YELLOW` | Backend is reachable but semantic/contract check failed |
+| Health endpoint returns non-200 or is unavailable | `RED` | Backend liveness failed |
+| API lifecycle indicates deprecated/retired | `DEPRECATED` | API is intentionally not treated as a normal production API |
+| No valid health strategy exists | `UNKNOWN` | API is not yet operationally classified |
+
+---
+
+## Health status cache endpoints
+
+| Endpoint | Description |
+| --- | --- |
+| `GET /health` | Cache service health |
+| `GET /cache/results` | Latest result per API |
+| `POST /cache/results` | Upsert one or more MI probe results |
+| `DELETE /cache/results` | Clear latest results and history |
+| `GET /cache/history` | Recent probe history |
+| `GET /cache/history?api=accounts-api&limit=25` | History for one API |
+| `GET /cache/summary` | Counts by status, domain, team and criticality |
+| `GET /cache/sla?api=accounts-api&window=30d` | SLA-style window for one API |
+| `GET /cache/sla/breaches?window=30d` | APIs that are not currently `OK` for the requested window |
+
+Examples:
+
+```bash
+curl http://localhost:6300/health | jq
+curl http://localhost:6300/cache/results | jq
+curl http://localhost:6300/cache/history?api=accounts-api\&limit=25 | jq
+curl 'http://localhost:6300/cache/sla?api=accounts-api&window=30d' | jq
+curl 'http://localhost:6300/cache/sla/breaches?window=30d' | jq
+```
+
+Supported SLA windows:
+
+```text
+30m
+6h
+7d
+30d
+```
+
+The SLA calculation is demo-grade and sample-based. It is not a replacement for a production observability store.
+
+---
+
+## Customer 360 integration API
+
+The enhanced demo includes a WSO2 Integrator composite API:
+
+```text
+GET /customer-360/v1/customers/{customerId}
+GET /customer-360/v1/health
+```
+
+It calls multiple mocked backend APIs and composes a single response:
+
+```text
+customers-api
+accounts-api
+cards-api
+loans-api
+```
+
+Example:
+
+```bash
+curl http://localhost:8290/customer-360/v1/customers/CUST-BR-001 | jq
+curl http://localhost:8290/customer-360/v1/health | jq
+```
+
+This exists to demonstrate that WSO2 Integrator is not only a health-check executor. It can also create reusable integration APIs that are then exposed and governed through WSO2 API Manager.
+
+---
+
+## Service Catalog integration
+
+The repository includes Service Catalog metadata for the Customer 360 API:
+
+```text
+wso2-integrator/catalogue-health-mi/src/main/wso2mi/resources/service-catalog/customer_360_openapi.yaml
+wso2-integrator/catalogue-health-mi/src/main/wso2mi/resources/service-catalog/customer_360_service.yaml
+```
+
+To automatically publish this integration service to APIM Service Catalog, enable the MI service catalog client in the MI `deployment.toml`:
+
+```toml
+[[service_catalog]]
+apim_host = "https://localhost:9443"
+enable = true
+username = "admin"
+password = "admin"
+```
+
+In a production-grade demo image, use a derived MI Docker image or controlled configuration overlay instead of bind-mounting a partial `deployment.toml` over the product default.
+
+Expected Service Catalog flow:
+
+```text
+WSO2 Integrator service
+  ↓
+Service Catalog metadata
+  ↓
+APIM Service Catalog
+  ↓
+Create API from service in Publisher
+  ↓
+Deploy to Gateway
+  ↓
+Publish to Developer Portal
+  ↓
+Subscribe and invoke through APIM Gateway
+```
+
+---
+
+## API Products demo
+
+For the customer narrative, create one API Product in APIM Publisher after the individual REST APIs are published.
+
+Suggested product:
+
+```text
+Retail Banking API Product
+```
+
+Suggested resources:
+
+```text
+customers-api
+accounts-api
+cards-api
+```
+
+Suggested second product:
+
+```text
+Credit Origination API Product
+```
+
+Suggested resources:
+
+```text
+customers-api
+loans-api
+payments-api
+```
+
+This shows the difference between technical API inventory and business capability packaging.
+
+API Products are best demonstrated manually in the Publisher UI unless you add dedicated API Product APICTL artifacts later.
 
 ---
 
@@ -390,11 +690,11 @@ npm install
 
 ---
 
-## Recommended `package.json` behavior
+## Expected package scripts
 
 The onboarding commands should import APIs and perform one one-shot reconciliation automatically.
 
-The important behavior is:
+Important behavior:
 
 ```text
 platform:onboard:* = import into APIM + reconcile once + recreate MI/UI once + stop
@@ -402,7 +702,7 @@ platform:onboard:* = import into APIM + reconcile once + recreate MI/UI once + s
 
 Do not keep a continuous watcher running during tier timing tests.
 
-Recommended scripts:
+Recommended `scripts` block entries:
 
 ```json
 {
@@ -422,8 +722,15 @@ Recommended scripts:
   "platform:onboard:loans": "npm run platform:import:loans && npm run platform:reconcile-once",
 
   "platform:sync-health": "npm run platform:reconcile-once",
-
   "platform:watch-sync": "echo 'Do not use platform:watch-sync during tier timing tests. Use platform:onboard:* or platform:reconcile-once instead.'",
+
+  "platform:governance:check": "node pipeline/scripts/enhanced-governance-check.js apictl/apis/*",
+  "platform:governance:dry-run:accounts": "docker-compose --profile platform run --rm -e APIM_ALLOW_INSECURE_TLS=true apictl \"bash pipeline/scripts/apictl-governance-dry-run.sh apictl/apis/accounts-api\"",
+  "platform:readiness": "node pipeline/scripts/apim-platform-readiness.js",
+  "platform:subscribe:accounts": "node pipeline/scripts/devportal-subscribe-and-invoke.js accounts-api /accounts/v1/health",
+  "platform:history": "curl http://localhost:6300/cache/history | jq",
+  "platform:sla:accounts": "curl 'http://localhost:6300/cache/sla?api=accounts-api&window=30d' | jq",
+  "platform:sla:breaches": "curl 'http://localhost:6300/cache/sla/breaches?window=30d' | jq",
 
   "platform:apictl": "docker-compose --profile platform run --rm apictl \"apictl version\"",
   "platform:logs:apim": "docker-compose --profile platform logs -f wso2-apim",
@@ -433,22 +740,64 @@ Recommended scripts:
 
 ---
 
+## Optional observability profile
+
+The enhancement pack includes:
+
+```text
+observability/otel-collector-config.yaml
+```
+
+Merge the `otel-collector` service into `docker-compose.yml` if you want to run a local OpenTelemetry Collector:
+
+```yaml
+services:
+  otel-collector:
+    image: otel/opentelemetry-collector:0.104.0
+    profiles: ["observability"]
+    command: ["--config=/etc/otelcol/config.yaml"]
+    volumes:
+      - ./observability/otel-collector-config.yaml:/etc/otelcol/config.yaml:ro
+    ports:
+      - "4317:4317"
+      - "4318:4318"
+    depends_on:
+      - wso2-integrator
+      - health-status-cache
+```
+
+Start with observability:
+
+```bash
+docker compose --profile platform --profile observability up -d --build
+```
+
+For a customer-facing Datadog story, the recommended architecture is:
+
+```text
+APIM traffic analytics
+  → APIM analytics log / external analytics sink
+  → Datadog or another observability backend
+
+MI synthetic health results
+  → health-status-cache
+  → summarized events only to Datadog
+```
+
+Do not send full probe payloads or sensitive business response bodies to Datadog.
+
+---
+
 ## Full clean reset
 
 Use this when you want the UI to start empty and APIM to contain no previously imported APIs.
-
-From the project root:
-
-```bash
-cd "/Users/joaoluiskuntz/Documents/wso2-api-catalogue-demo(5)"
-```
 
 Stop containers and remove volumes:
 
 ```bash
 docker-compose --profile platform down -v --remove-orphans
 docker rm -f wso2-apim-47 wso2-integrator-mi wso2-apictl-runner 2>/dev/null || true
-docker rm -f $(docker ps -a --filter "name=wso2-api-catalogue-demo5" -q) 2>/dev/null || true
+docker rm -f $(docker ps -a --filter "name=wso2-api-catalogue-demo" -q) 2>/dev/null || true
 docker network rm wso2-api-catalogue-demo5_default 2>/dev/null || true
 ```
 
@@ -463,10 +812,12 @@ rm -f wso2-integrator/catalogue-health-mi/src/main/wso2mi/artifacts/tasks/schedu
 rm -f wso2-integrator/catalogue-health-mi/src/main/wso2mi/artifacts/apis/health_registry_api.xml
 ```
 
-Keep:
+Keep these manual MI artifacts:
 
 ```text
 wso2-integrator/catalogue-health-mi/src/main/wso2mi/artifacts/apis/catalogue_status_api.xml
+wso2-integrator/catalogue-health-mi/src/main/wso2mi/artifacts/apis/customer_360_api.xml
+wso2-integrator/catalogue-health-mi/src/main/wso2mi/artifacts/apis/platform_status_api.xml
 ```
 
 Remove persistent cache and APICTL volumes explicitly:
@@ -479,8 +830,8 @@ docker volume rm wso2-api-catalogue-demo5_apictl-home 2>/dev/null || true
 Validate clean state:
 
 ```bash
-docker ps -a | grep -E "wso2-api-catalogue-demo5|wso2-apim|wso2-integrator|wso2-apictl|health-status-cache" || echo "No project containers left"
-docker network ls | grep wso2-api-catalogue-demo5 || echo "No project network left"
+docker ps -a | grep -E "wso2-api-catalogue-demo|wso2-apim|wso2-integrator|wso2-apictl|health-status-cache" || echo "No project containers left"
+docker network ls | grep wso2-api-catalogue-demo || echo "No project network left"
 ```
 
 ---
@@ -508,7 +859,7 @@ Check containers:
 docker-compose --profile platform ps
 ```
 
-Validate the cache:
+Validate cache:
 
 ```bash
 curl http://localhost:6300/health | jq
@@ -531,6 +882,30 @@ For a clean start, the UI should be empty until APIs are onboarded and MI schedu
 
 ---
 
+## Check platform readiness
+
+Run:
+
+```bash
+npm run platform:readiness
+```
+
+This validates platform-level reachability for APIM, MI and the cache. It does not prove that every backend API is healthy.
+
+You can also directly check the MI platform status API:
+
+```bash
+curl http://localhost:8290/platform-status/v1/health | jq
+```
+
+For APIM gateway startup readiness, use the APIM gateway health-check endpoint where applicable:
+
+```bash
+curl -k https://localhost:9443/api/am/gateway/v2/server-startup-healthcheck
+```
+
+---
+
 ## Progressive onboarding demo
 
 This is the main storyline.
@@ -545,7 +920,13 @@ payments-api
 customers-api
 ```
 
-Run:
+Run local governance validation first:
+
+```bash
+npm run platform:governance:check
+```
+
+Run onboarding:
 
 ```bash
 npm run platform:onboard:initial3
@@ -622,7 +1003,37 @@ The UI should show 3 APIs.
 
 ---
 
-### Phase 2 — Onboard `cards-api` later
+### Phase 2 — Demonstrate Developer Portal subscription and APIM Gateway invocation
+
+After `accounts-api` is published, run:
+
+```bash
+npm run platform:subscribe:accounts
+```
+
+This script:
+
+```text
+1. Registers a temporary REST client against APIM.
+2. Finds accounts-api in the Developer Portal API list.
+3. Creates or reuses a demo application.
+4. Subscribes the application to the API.
+5. Generates production keys.
+6. Obtains a client-credentials token.
+7. Invokes the API through the APIM Gateway.
+```
+
+Expected invocation target:
+
+```text
+https://localhost:8243/accounts/v1/health
+```
+
+This proves the demo is not only an API list. It shows governed consumer access through the Developer Portal and Gateway.
+
+---
+
+### Phase 3 — Onboard `cards-api` later
 
 This simulates a new API team onboarding another API after the initial rollout.
 
@@ -670,7 +1081,7 @@ The UI should now show 4 APIs.
 
 ---
 
-### Phase 3 — Try to onboard an invalid `loans-api`
+### Phase 4 — Try to onboard an invalid `loans-api`
 
 For this part of the demo, `loans-api` should be intentionally incomplete.
 
@@ -726,6 +1137,18 @@ Confirm it is missing:
 grep -n "health_expected_payload_json" apictl/apis/loans-api/api.yaml || echo "OK: missing as expected"
 ```
 
+Run local governance validation:
+
+```bash
+npm run platform:governance:check
+```
+
+Expected failure:
+
+```text
+Missing required metadata property: health_expected_payload_json
+```
+
 Now attempt to onboard loans:
 
 ```bash
@@ -736,7 +1159,6 @@ Expected failure:
 
 ```text
 Missing required APIM health metadata property: health_expected_payload_json
-
 APICTL artifact check failed for loans-api.
 This API will not be imported into WSO2 API Manager.
 ```
@@ -759,7 +1181,7 @@ Expected still:
 
 ---
 
-### Phase 4 — Fix `loans-api` and onboard successfully
+### Phase 5 — Fix `loans-api` and onboard successfully
 
 Add this block back to:
 
@@ -820,6 +1242,12 @@ Confirm it exists:
 
 ```bash
 grep -n "health_expected_payload_json" apictl/apis/loans-api/api.yaml
+```
+
+Validate again:
+
+```bash
+npm run platform:governance:check
 ```
 
 Run the same onboarding command again:
@@ -965,14 +1393,6 @@ If `/health` calls appear at their tier interval, that is expected. Those are MI
 
 ## Health behavior testing
 
-The Integrator classifies API health into consumer-facing states:
-
-| Scenario | Result |
-| --- | --- |
-| Health endpoint returns expected HTTP status and expected payload | `GREEN` |
-| Health endpoint returns HTTP 200 but payload contract is wrong | `YELLOW` |
-| Health endpoint returns non-200 or unavailable state | `RED` |
-
 Because manual full-probe execution is disabled, wait for the next scheduled MI task after changing a backend mode.
 
 For `accounts-api`, wait up to 60 seconds because it is Tier 0.
@@ -1057,6 +1477,38 @@ contract.status = OK
 
 ---
 
+## SLA and history validation
+
+After the scheduled tasks have run several times, inspect history:
+
+```bash
+npm run platform:history
+```
+
+Inspect one API SLA-style window:
+
+```bash
+npm run platform:sla:accounts
+```
+
+Inspect non-OK SLA-style windows:
+
+```bash
+npm run platform:sla:breaches
+```
+
+Example direct calls:
+
+```bash
+curl 'http://localhost:6300/cache/sla?api=accounts-api&window=30m' | jq
+curl 'http://localhost:6300/cache/sla?api=accounts-api&window=7d' | jq
+curl 'http://localhost:6300/cache/sla/breaches?window=30d' | jq
+```
+
+The SLA model is sample-based for the demo. In production, send gateway traffic analytics and synthetic probe results to a proper observability store such as Datadog, OpenSearch or another platform selected by the customer.
+
+---
+
 ## Direct validation endpoints
 
 ### Health registry from MI
@@ -1075,6 +1527,12 @@ curl http://localhost:8290/catalogue-status/v1/apis | jq
 
 ```bash
 curl http://localhost:6300/cache/results | jq
+```
+
+### History from cache
+
+```bash
+curl http://localhost:6300/cache/history | jq
 ```
 
 ### Summary from MI
@@ -1129,10 +1587,34 @@ npm run platform:up
 npm run platform:down
 ```
 
+### Validate governance metadata
+
+```bash
+npm run platform:governance:check
+```
+
+### Run APIM dry-run governance check for accounts
+
+```bash
+npm run platform:governance:dry-run:accounts
+```
+
+### Check platform readiness
+
+```bash
+npm run platform:readiness
+```
+
 ### Onboard initial 3 APIs
 
 ```bash
 npm run platform:onboard:initial3
+```
+
+### Subscribe to accounts and invoke through APIM Gateway
+
+```bash
+npm run platform:subscribe:accounts
 ```
 
 ### Onboard cards later
@@ -1193,6 +1675,23 @@ admin / admin
 
 The APIs appear in Publisher only after they are onboarded through the APICTL scripts.
 
+Open the Developer Portal:
+
+```text
+https://localhost:9443/devportal
+```
+
+Use the Developer Portal to show:
+
+```text
+API discovery
+API documentation
+Application creation
+Subscription
+Key generation
+API invocation through Gateway
+```
+
 ---
 
 ## WSO2 Integrator access
@@ -1204,6 +1703,9 @@ GET  /catalogue-status/v1/apis
 GET  /catalogue-status/v1/summary
 GET  /health-registry/v1/apis
 POST /health-registry/v1/probes/run
+GET  /platform-status/v1/health
+GET  /customer-360/v1/customers/{customerId}
+GET  /customer-360/v1/health
 ```
 
 Important:
@@ -1218,6 +1720,8 @@ Examples:
 curl http://localhost:8290/catalogue-status/v1/apis | jq
 curl http://localhost:8290/catalogue-status/v1/summary | jq
 curl http://localhost:8290/health-registry/v1/apis | jq
+curl http://localhost:8290/platform-status/v1/health | jq
+curl http://localhost:8290/customer-360/v1/customers/CUST-BR-001 | jq
 curl -i -X POST http://localhost:8290/health-registry/v1/probes/run
 ```
 
@@ -1264,13 +1768,15 @@ The demo models a CI/CD process where:
 
 ```text
 1. API team commits APICTL project.
-2. Pipeline validates required API metadata.
-3. Pipeline imports the API into WSO2 API Manager.
-4. API Manager becomes the source of truth.
-5. Pipeline performs one-shot APIM-to-MI reconciliation.
-6. WSO2 Integrator executes tiered scheduled health checks.
-7. Health status cache stores latest known readings.
-8. Catalogue UI reflects only successfully governed APIs.
+2. Pipeline validates required catalogue and health metadata.
+3. Pipeline optionally runs APIM governance dry-run.
+4. Pipeline imports the API into WSO2 API Manager.
+5. API Manager becomes the source of truth.
+6. Pipeline performs one-shot APIM-to-MI reconciliation.
+7. WSO2 Integrator executes tiered scheduled health checks.
+8. Health status cache stores latest known readings and history.
+9. Catalogue UI reflects only successfully governed APIs.
+10. Consumers discover, subscribe and invoke through APIM.
 ```
 
 The key point is:
@@ -1291,6 +1797,8 @@ WSO2 API Manager
   API catalogue
   API governance
   API publication
+  API subscriptions
+  API gateway exposure
   API metadata source of truth
 
 WSO2 Integrator
@@ -1299,9 +1807,13 @@ WSO2 Integrator
   Contract validation
   Status normalization
   Tiered scheduled checks
+  Composite integration APIs
+  Service Catalog contribution to APIM
 
 health-status-cache
   Latest known health readings
+  Historical probe samples
+  SLA-style windows
   Stable UI read model
   No direct probe execution from UI
 
@@ -1311,9 +1823,36 @@ Catalogue UI
   Cache reader only
 ```
 
-This avoids making the UI an operational execution trigger.
+This avoids making the UI an operational execution trigger and avoids hiding business health logic inside the gateway request path.
 
 New APIs are onboarded through API Manager metadata and synchronized into MI through a one-shot reconciliation process.
+
+---
+
+## Git hygiene
+
+Generated MI artifacts should not be committed unless you intentionally want to version generated outputs for a demo snapshot.
+
+Recommended `.gitignore` additions:
+
+```gitignore
+# Generated WSO2 Integrator health artifacts
+wso2-integrator/catalogue-health-mi/src/main/wso2mi/artifacts/sequences/check_*.xml
+wso2-integrator/catalogue-health-mi/src/main/wso2mi/artifacts/sequences/run_all_health_checks.xml
+wso2-integrator/catalogue-health-mi/src/main/wso2mi/artifacts/sequences/run_tier*_health_checks.xml
+wso2-integrator/catalogue-health-mi/src/main/wso2mi/artifacts/tasks/scheduled_health_check.xml
+wso2-integrator/catalogue-health-mi/src/main/wso2mi/artifacts/tasks/scheduled_tier*_health_check.xml
+wso2-integrator/catalogue-health-mi/src/main/wso2mi/artifacts/apis/health_registry_api.xml
+
+# Local runtime data
+health-status-cache/data/
+*.log
+.DS_Store
+node_modules/
+.env
+```
+
+Keep the manually maintained MI APIs and Service Catalog metadata under version control.
 
 ---
 
@@ -1384,7 +1923,7 @@ Then run:
 ```bash
 docker-compose --profile platform down -v --remove-orphans
 docker rm -f wso2-apim-47 wso2-integrator-mi wso2-apictl-runner 2>/dev/null || true
-docker rm -f $(docker ps -a --filter "name=wso2-api-catalogue-demo5" -q) 2>/dev/null || true
+docker rm -f $(docker ps -a --filter "name=wso2-api-catalogue-demo" -q) 2>/dev/null || true
 docker network inspect wso2-api-catalogue-demo5_default \
   --format '{{range $id, $c := .Containers}}{{$id}} {{end}}' \
   2>/dev/null | xargs docker rm -f 2>/dev/null || true
@@ -1416,6 +1955,40 @@ Run with:
 docker-compose --profile platform run --rm -e APIM_ALLOW_INSECURE_TLS=true apictl \
   "node pipeline/scripts/sync-mi-health-from-apim.js"
 ```
+
+For production, use a trusted certificate instead of disabling TLS validation.
+
+### Developer Portal subscription script cannot find the API
+
+Confirm the API is published and visible in Developer Portal:
+
+```bash
+curl -ks https://localhost:9443/devportal >/dev/null && echo "Developer Portal reachable"
+```
+
+Then confirm the API was imported and published:
+
+```bash
+npm run platform:onboard:initial3
+```
+
+Then retry:
+
+```bash
+npm run platform:subscribe:accounts
+```
+
+### Gateway invocation returns 401 or 403
+
+The API may not be published, the subscription may not exist, or the generated token may not match the subscribed application.
+
+Retry the full subscription smoke test:
+
+```bash
+npm run platform:subscribe:accounts
+```
+
+If the problem persists, inspect the API in Publisher and the application/subscription in Developer Portal.
 
 ### All APIs update at the same time forever
 
@@ -1497,24 +2070,39 @@ http://localhost:5173
 
 ## Demo narrative
 
-The final demo story is:
+The final customer story is:
 
 ```text
 1. The platform starts with WSO2 API Manager, WSO2 Integrator, mocked banking APIs, health-status-cache and the catalogue UI.
 2. The UI starts empty after a clean reset.
-3. Three APIs are onboarded through APICTL.
+3. Three APIs are validated and onboarded through APICTL.
 4. API Manager stores their lifecycle and health metadata.
 5. The onboarding command performs one-shot APIM-to-MI reconciliation.
 6. WSO2 Integrator executes tiered scheduled checks.
-7. The cache stores the latest known readings.
+7. The cache stores latest readings, history and SLA-style samples.
 8. The UI shows the three governed APIs.
-9. A fourth API is onboarded later and appears after reconciliation and scheduled checks.
-10. A fifth API is attempted with missing metadata and is rejected before import.
-11. The metadata is fixed.
-12. The same onboarding command is rerun.
-13. The fifth API is imported, synchronized and shown in the catalogue.
-14. Health tests prove GREEN, YELLOW and RED behavior.
-15. Tier timing proves that Tier 0, Tier 1 and Tier 2 APIs are checked at different frequencies.
+9. A Developer Portal application subscribes to an API and invokes it through APIM Gateway.
+10. A fourth API is onboarded later and appears after reconciliation and scheduled checks.
+11. A fifth API is attempted with missing metadata and is rejected before import.
+12. The metadata is fixed.
+13. The same onboarding command is rerun.
+14. The fifth API is imported, synchronized and shown in the catalogue.
+15. Health tests prove GREEN, YELLOW and RED behavior.
+16. Tier timing proves Tier 0, Tier 1 and Tier 2 APIs are checked at different frequencies.
+17. Customer 360 proves Integrator can create a composed business API.
+18. Service Catalog metadata shows how Integrator services can become APIM-managed APIs.
+19. API Products show how technical APIs can be packaged into business capabilities.
 ```
 
 This demonstrates a governed, production-style API catalogue modernization pattern using WSO2 API Manager and WSO2 Integrator.
+
+---
+
+## Official documentation references
+
+* WSO2 API Manager 4.7 documentation: `https://apim.docs.wso2.com/en/4.7.0/`
+* CI/CD-driven API governance with APICTL dry-run: `https://apim.docs.wso2.com/en/4.7.0/administer/governance/api-governance-cicd/`
+* Publishing Integrator services to API Manager Service Catalog: `https://apim.docs.wso2.com/en/4.7.0/integrate/develop/working-with-service-catalog/`
+* API Product overview: `https://apim.docs.wso2.com/en/4.7.0/api-design-manage/design/create-api-product/api-product-overview/`
+* API Manager basic and gateway startup health checks: `https://apim.docs.wso2.com/en/4.7.0/install-and-setup/setup/deployment-best-practices/basic-health-checks/`
+* Datadog analytics installation guide for API Manager: `https://apim.docs.wso2.com/en/4.7.0/monitoring/api-analytics/on-prem/datadog-installation-guide/`

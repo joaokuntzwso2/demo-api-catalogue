@@ -1,0 +1,80 @@
+{
+  "schemaVersion": "1.0.0",
+  "description": "Local APIOps guardrail set for the WSO2 API Catalogue demo. It complements APIM 4.7 governance dry-run by validating catalogue-specific metadata before APICTL import.",
+  "requiredTopLevelFields": [
+    "name",
+    "version",
+    "context"
+  ],
+  "requiredAdditionalProperties": [
+    "health_enabled",
+    "health_backend_url",
+    "health_path",
+    "health_method",
+    "health_expected_http_status",
+    "health_expected_payload_json",
+    "health_required_fields",
+    "health_sla_target",
+    "health_criticality",
+    "health_runtime",
+    "health_domain",
+    "health_owner_team",
+    "health_owner_email"
+  ],
+  "recommendedAdditionalProperties": [
+    "data_classification",
+    "regulatory_scope",
+    "support_channel",
+    "runbook_url",
+    "repository_url",
+    "maintenance_window",
+    "retirement_date",
+    "gateway_type",
+    "environment"
+  ],
+  "allowedValues": {
+    "health_enabled": ["true", "false"],
+    "health_method": ["GET", "HEAD", "POST"],
+    "health_criticality": ["Tier 0", "Tier 1", "Tier 2", "Tier 3"],
+    "data_classification": ["Public", "Internal", "Confidential", "Restricted"],
+    "regulatory_scope": ["None", "LGPD", "Open Finance", "PCI", "Internal"],
+    "gateway_type": ["wso2-classic", "wso2-platform", "wso2-kubernetes", "external", "federated"],
+    "environment": ["dev", "test", "homolog", "production"]
+  },
+  "tierRules": {
+    "Tier 0": {
+      "requiresSemanticValidation": true,
+      "requiresRunbook": true,
+      "requiresSupportChannel": true,
+      "minimumSlaPercent": 99.9
+    },
+    "Tier 1": {
+      "requiresSemanticValidation": true,
+      "requiresRunbook": true,
+      "requiresSupportChannel": true,
+      "minimumSlaPercent": 99.5
+    },
+    "Tier 2": {
+      "requiresSemanticValidation": false,
+      "requiresRunbook": false,
+      "requiresSupportChannel": true,
+      "minimumSlaPercent": 99.0
+    },
+    "Tier 3": {
+      "requiresSemanticValidation": false,
+      "requiresRunbook": false,
+      "requiresSupportChannel": false,
+      "minimumSlaPercent": 95.0
+    }
+  },
+  "deprecatedLifecycleValues": [
+    "DEPRECATED",
+    "DEPRECIATED",
+    "RETIRED"
+  ],
+  "productionRules": {
+    "healthStrategyRequired": true,
+    "securitySchemeRequired": true,
+    "retirementDateRequiredForDeprecatedApis": true
+  }
+}

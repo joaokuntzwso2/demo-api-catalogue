@@ -1,0 +1,115 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<api xmlns="http://ws.apache.org/ns/synapse" name="Customer360API" context="/customer-360/v1">
+    <resource methods="GET" uri-template="/customers/{customerId}">
+        <inSequence>
+            <property name="customerId" expression="get-property('uri.var.customerId')" scope="default" type="STRING"/>
+            <property name="messageType" value="application/json" scope="axis2" type="STRING"/>
+            <property name="ContentType" value="application/json" scope="axis2" type="STRING"/>
+
+            <call>
+                <endpoint>
+                    <http method="get" uri-template="http://customers-api:5103/customers/v1/customers/{uri.var.customerId}"/>
+                </endpoint>
+            </call>
+            <enrich>
+                <source clone="true" type="body"/>
+                <target action="replace" property="customerResponse" type="property"/>
+            </enrich>
+
+            <call>
+                <endpoint>
+                    <http method="get" uri-template="http://accounts-api:5101/accounts/v1/accounts/{uri.var.customerId}"/>
+                </endpoint>
+            </call>
+            <enrich>
+                <source clone="true" type="body"/>
+                <target action="replace" property="accountsResponse" type="property"/>
+            </enrich>
+
+            <call>
+                <endpoint>
+                    <http method="get" uri-template="http://cards-api:5104/cards/v1/cards/{uri.var.customerId}"/>
+                </endpoint>
+            </call>
+            <enrich>
+                <source clone="true" type="body"/>
+                <target action="replace" property="cardsResponse" type="property"/>
+            </enrich>
+
+            <call>
+                <endpoint>
+                    <http method="get" uri-template="http://loans-api:5105/loans/v1/loans/{uri.var.customerId}"/>
+                </endpoint>
+            </call>
+            <enrich>
+                <source clone="true" type="body"/>
+                <target action="replace" property="loansResponse" type="property"/>
+            </enrich>
+
+            <payloadFactory media-type="json">
+                <format>{
+  "service": "customer-360-integration",
+  "timestamp": "$1",
+  "customerId": "$2",
+  "sources": {
+    "customer": $3,
+    "accounts": $4,
+    "cards": $5,
+    "loans": $6
+  },
+  "governance": {
+    "integrationRuntime": "WSO2 Integrator / Micro Integrator",
+    "exposurePattern": "Publish this integration service to WSO2 API Manager Service Catalog and expose it as a managed API."
+  }
+}</format>
+                <args>
+                    <arg evaluator="xml" expression="get-property('SYSTEM_DATE')"/>
+                    <arg evaluator="xml" expression="get-property('customerId')"/>
+                    <arg evaluator="xml" expression="get-property('customerResponse')"/>
+                    <arg evaluator="xml" expression="get-property('accountsResponse')"/>
+                    <arg evaluator="xml" expression="get-property('cardsResponse')"/>
+                    <arg evaluator="xml" expression="get-property('loansResponse')"/>
+                </args>
+            </payloadFactory>
+            <respond/>
+        </inSequence>
+        <faultSequence>
+            <payloadFactory media-type="json">
+                <format>{
+  "status": "ERROR",
+  "service": "customer-360-integration",
+  "message": "Failed to compose Customer 360 view",
+  "customerId": "$1"
+}</format>
+                <args>
+                    <arg evaluator="xml" expression="get-property('uri.var.customerId')"/>
+                </args>
+            </payloadFactory>
+            <property name="HTTP_SC" value="502" scope="axis2" type="STRING"/>
+            <respond/>
+        </faultSequence>
+    </resource>
+
+    <resource methods="GET" uri-template="/health">
+        <inSequence>
+            <payloadFactory media-type="json">
+                <format>{
+  "status": "UP",
+  "service": "customer-360-integration",
+  "timestamp": "$1",
+  "checks": {
+    "customers-api": "CONFIGURED",
+    "accounts-api": "CONFIGURED",
+    "cards-api": "CONFIGURED",
+    "loans-api": "CONFIGURED"
+  }
+}</format>
+                <args>
+                    <arg evaluator="xml" expression="get-property('SYSTEM_DATE')"/>
+                </args>
+            </payloadFactory>
+            <respond/>
+        </inSequence>
+        <faultSequence/>
+    </resource>
+</api>

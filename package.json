@@ -32,7 +32,15 @@
     "platform:apictl": "docker-compose --profile platform run --rm apictl \"apictl version\"",
     "platform:logs:apim": "docker-compose --profile platform logs -f wso2-apim",
     "platform:logs:integrator": "docker-compose --profile platform logs -f wso2-integrator",
-    "platform:clean-generated": "bash pipeline/scripts/clean-generated-mi-artifacts.sh"
+    "platform:clean-generated": "bash pipeline/scripts/clean-generated-mi-artifacts.sh",
+
+    "platform:governance:check": "node pipeline/scripts/enhanced-governance-check.js apictl/apis/*",
+    "platform:governance:dry-run:accounts": "docker-compose --profile platform run --rm -e APIM_ALLOW_INSECURE_TLS=true apictl \"bash pipeline/scripts/apictl-governance-dry-run.sh apictl/apis/accounts-api\"",
+    "platform:readiness": "node pipeline/scripts/apim-platform-readiness.js",
+    "platform:subscribe:accounts": "node pipeline/scripts/devportal-subscribe-and-invoke.js accounts-api /accounts/v1/health",
+    "platform:history": "curl http://localhost:6300/cache/history | jq",
+    "platform:sla:accounts": "curl 'http://localhost:6300/cache/sla?api=accounts-api&window=30d' | jq",
+    "platform:sla:breaches": "curl 'http://localhost:6300/cache/sla/breaches?window=30d' | jq"
   },
   "workspaces": [
     "apis/*",

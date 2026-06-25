@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<api xmlns="http://ws.apache.org/ns/synapse" name="PlatformStatusAPI" context="/platform-status/v1">
+    <resource methods="GET" uri-template="/health">
+        <inSequence>
+            <payloadFactory media-type="json">
+                <format>{
+  "status": "UP",
+  "service": "platform-status-api",
+  "timestamp": "$1",
+  "semantics": "This endpoint only confirms that this MI API is deployed. Use pipeline/scripts/apim-platform-readiness.js for end-to-end APIM/MI/cache readiness."
+}</format>
+                <args>
+                    <arg evaluator="xml" expression="get-property('SYSTEM_DATE')"/>
+                </args>
+            </payloadFactory>
+            <respond/>
+        </inSequence>
+        <faultSequence/>
+    </resource>
+</api>

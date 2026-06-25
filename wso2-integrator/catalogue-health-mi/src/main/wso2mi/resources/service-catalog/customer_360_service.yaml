@@ -1,0 +1,12 @@
+# Service Catalog metadata for the Customer 360 integration service.
+# This mirrors the metadata Integration Studio generates for MI services.
+# The MI Service Catalog client requires service catalog publishing to be enabled in MI deployment.toml.
+name: Customer 360 Integration Service
+version: v1
+description: Composite Customer 360 API produced by WSO2 Integrator and exposed to APIM Service Catalog for managed publication.
+serviceUrl: http://{MI_HOST}:{MI_PORT}/customer-360/v1
+definitionType: OAS3
+definitionFile: customer_360_openapi.yaml
+type: REST
+mutualSSLEnabled: false
+securityType: oauth2
