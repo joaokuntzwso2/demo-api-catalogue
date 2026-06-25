@@ -1,0 +1,10 @@
+type: api_meta
+version: v4.4.0
+data:
+  name: cards-api
+  description: Consulta de cartões, limites e status operacional.
+  context: /cards/v1
+  version: 1.0.0
+  type: HTTP
+  provider: admin
+  lifeCycleStatus: PUBLISHED

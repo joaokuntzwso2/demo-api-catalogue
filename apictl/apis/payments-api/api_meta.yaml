@@ -1,0 +1,10 @@
+type: api_meta
+version: v4.4.0
+data:
+  name: payments-api
+  description: Iniciação e consulta de pagamentos internos e instantâneos.
+  context: /payments/v1
+  version: 1.0.0
+  type: HTTP
+  provider: admin
+  lifeCycleStatus: PUBLISHED

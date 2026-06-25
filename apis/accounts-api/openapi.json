@@ -1,0 +1,105 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "Accounts API",
+    "version": "1.0.0",
+    "description": "Consulta de contas, saldos e transações de clientes."
+  },
+  "servers": [
+    {
+      "url": "http://localhost:5101"
+    }
+  ],
+  "paths": {
+    "/accounts/v1/health": {
+      "get": {
+        "summary": "Health endpoint",
+        "responses": {
+          "200": {
+            "description": "Health response"
+          },
+          "503": {
+            "description": "Service unavailable"
+          }
+        }
+      }
+    },
+    "/accounts/v1/__admin/health-mode": {
+      "post": {
+        "summary": "Demo-only health simulation endpoint",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "mode": {
+                    "type": "string",
+                    "enum": [
+                      "healthy",
+                      "degraded",
+                      "wrongPayload",
+                      "down"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Mode updated"
+          }
+        }
+      }
+    },
+    "/accounts/v1/accounts/{customerId}": {
+      "get": {
+        "summary": "Consultar contas do cliente",
+        "parameters": [
+          {
+            "name": "customerId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "404": {
+            "description": "Not found"
+          }
+        }
+      }
+    },
+    "/accounts/v1/accounts/{accountId}/transactions": {
+      "get": {
+        "summary": "Consultar transações da conta",
+        "parameters": [
+          {
+            "name": "accountId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "404": {
+            "description": "Not found"
+          }
+        }
+      }
+    }
+  }
+}

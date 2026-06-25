@@ -1,0 +1,38 @@
+{
+  "apiId": "cards-api-v1",
+  "name": "Cards API",
+  "version": "1.0.0",
+  "description": "Consulta de cartões, limites e status operacional.",
+  "domain": "Cards",
+  "owner": {
+    "team": "Cards Squad",
+    "email": "cards-squad@bank.demo"
+  },
+  "criticality": "Tier 1",
+  "slaTarget": "99.70",
+  "runtime": "Kubernetes",
+  "lifecycle": "PUBLISHED",
+  "gatewayUrl": "http://localhost:5104/cards/v1",
+  "backendBaseUrl": "http://cards-api:5104/cards/v1",
+  "healthStrategy": {
+    "type": "liveness_and_contract",
+    "method": "GET",
+    "path": "/health",
+    "expectedHttpStatus": 200,
+    "timeoutMs": 2500,
+    "expectedPayload": {
+      "status": "UP",
+      "service": "cards-api"
+    },
+    "requiredFields": [
+      "status",
+      "service",
+      "timestamp",
+      "checks.database"
+    ]
+  },
+  "links": {
+    "documentation": "/devportal/apis/cards-api-v1",
+    "support": "mailto:cards-squad@bank.demo"
+  }
+}

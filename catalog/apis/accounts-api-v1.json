@@ -1,0 +1,38 @@
+{
+  "apiId": "accounts-api-v1",
+  "name": "Accounts API",
+  "version": "1.0.0",
+  "description": "Consulta de contas, saldos e transações de clientes.",
+  "domain": "Retail Banking",
+  "owner": {
+    "team": "Accounts Platform",
+    "email": "accounts-platform@bank.demo"
+  },
+  "criticality": "Tier 0",
+  "slaTarget": "99.90",
+  "runtime": "AWS / EKS",
+  "lifecycle": "PUBLISHED",
+  "gatewayUrl": "http://localhost:5101/accounts/v1",
+  "backendBaseUrl": "http://accounts-api:5101/accounts/v1",
+  "healthStrategy": {
+    "type": "liveness_and_contract",
+    "method": "GET",
+    "path": "/health",
+    "expectedHttpStatus": 200,
+    "timeoutMs": 2500,
+    "expectedPayload": {
+      "status": "UP",
+      "service": "accounts-api"
+    },
+    "requiredFields": [
+      "status",
+      "service",
+      "timestamp",
+      "checks.database"
+    ]
+  },
+  "links": {
+    "documentation": "/devportal/apis/accounts-api-v1",
+    "support": "mailto:accounts-platform@bank.demo"
+  }
+}

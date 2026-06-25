@@ -1,0 +1,10 @@
+type: api_meta
+version: v4.4.0
+data:
+  name: loans-api
+  description: Consulta de propostas, contratos e simulações de crédito.
+  context: /loans/v1
+  version: 1.0.0
+  type: HTTP
+  provider: admin
+  lifeCycleStatus: PUBLISHED

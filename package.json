@@ -1,0 +1,44 @@
+{
+  "name": "wso2-api-catalogue-demo",
+  "private": true,
+  "version": "1.0.0",
+  "description": "End-to-end demo for WSO2 API Manager + WSO2 Integrator API catalogue modernization.",
+  "scripts": {
+    "demo:up": "docker-compose up --build",
+    "demo:down": "docker-compose down -v",
+
+    "validate:contracts": "node pipeline/scripts/validate-openapi.js",
+    "simulate:dev-team": "bash pipeline/scripts/simulate-dev-team-journey.sh",
+
+    "platform:up": "docker-compose --profile platform up -d --build",
+    "platform:down": "docker-compose --profile platform down -v --remove-orphans",
+
+    "platform:import:all": "docker-compose --profile platform run --rm -e APIM_ALLOW_INSECURE_TLS=true apictl \"bash pipeline/scripts/deploy-all-to-apim.sh\"",
+    "platform:import:initial3": "docker-compose --profile platform run --rm -e APIM_ALLOW_INSECURE_TLS=true apictl \"bash pipeline/scripts/deploy-initial-3-to-apim.sh\"",
+    "platform:import:cards": "docker-compose --profile platform run --rm -e APIM_ALLOW_INSECURE_TLS=true apictl \"bash pipeline/scripts/deploy-cards-later-to-apim.sh\"",
+    "platform:import:loans": "docker-compose --profile platform run --rm -e APIM_ALLOW_INSECURE_TLS=true apictl \"bash pipeline/scripts/deploy-loans-later-to-apim.sh\"",
+
+    "platform:reconcile-once": "docker-compose --profile platform run --rm -e APIM_ALLOW_INSECURE_TLS=true apictl \"node pipeline/scripts/sync-mi-health-from-apim.js\" && docker-compose --profile platform up -d --force-recreate wso2-integrator ui-platform",
+
+    "platform:onboard": "npm run platform:import:all && npm run platform:reconcile-once",
+    "platform:onboard:initial3": "npm run platform:import:initial3 && npm run platform:reconcile-once",
+    "platform:onboard:cards": "npm run platform:import:cards && npm run platform:reconcile-once",
+    "platform:onboard:loans": "npm run platform:import:loans && npm run platform:reconcile-once",
+
+    "platform:sync-health": "npm run platform:reconcile-once",
+
+    "platform:watch-sync": "echo 'Do not use platform:watch-sync during tier timing tests. Use platform:onboard:* or platform:reconcile-once instead.'",
+
+    "platform:apictl": "docker-compose --profile platform run --rm apictl \"apictl version\"",
+    "platform:logs:apim": "docker-compose --profile platform logs -f wso2-apim",
+    "platform:logs:integrator": "docker-compose --profile platform logs -f wso2-integrator",
+    "platform:clean-generated": "bash pipeline/scripts/clean-generated-mi-artifacts.sh"
+  },
+  "workspaces": [
+    "apis/*",
+    "ui"
+  ],
+  "devDependencies": {
+    "@apidevtools/swagger-parser": "^10.1.0"
+  }
+}

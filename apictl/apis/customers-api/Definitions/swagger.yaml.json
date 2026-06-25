@@ -1,0 +1,105 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "Customers API",
+    "version": "1.0.0",
+    "description": "Consulta de dados cadastrais e perfil de cliente."
+  },
+  "servers": [
+    {
+      "url": "http://localhost:5103"
+    }
+  ],
+  "paths": {
+    "/customers/v1/health": {
+      "get": {
+        "summary": "Health endpoint",
+        "responses": {
+          "200": {
+            "description": "Health response"
+          },
+          "503": {
+            "description": "Service unavailable"
+          }
+        }
+      }
+    },
+    "/customers/v1/__admin/health-mode": {
+      "post": {
+        "summary": "Demo-only health simulation endpoint",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "mode": {
+                    "type": "string",
+                    "enum": [
+                      "healthy",
+                      "degraded",
+                      "wrongPayload",
+                      "down"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Mode updated"
+          }
+        }
+      }
+    },
+    "/customers/v1/customers/{customerId}": {
+      "get": {
+        "summary": "Consultar cliente",
+        "parameters": [
+          {
+            "name": "customerId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "404": {
+            "description": "Not found"
+          }
+        }
+      }
+    },
+    "/customers/v1/customers/{customerId}/profile": {
+      "get": {
+        "summary": "Consultar perfil do cliente",
+        "parameters": [
+          {
+            "name": "customerId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "404": {
+            "description": "Not found"
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,130 @@
+services:
+  accounts-api:
+    build: ./apis/accounts-api
+    ports: ["5101:5101"]
+    environment:
+      PORT: 5101
+      API_CONTEXT: /accounts/v1
+      API_NAME: accounts-api
+
+  payments-api:
+    build: ./apis/payments-api
+    ports: ["5102:5102"]
+    environment:
+      PORT: 5102
+      API_CONTEXT: /payments/v1
+      API_NAME: payments-api
+
+  customers-api:
+    build: ./apis/customers-api
+    ports: ["5103:5103"]
+    environment:
+      PORT: 5103
+      API_CONTEXT: /customers/v1
+      API_NAME: customers-api
+
+  cards-api:
+    build: ./apis/cards-api
+    ports: ["5104:5104"]
+    environment:
+      PORT: 5104
+      API_CONTEXT: /cards/v1
+      API_NAME: cards-api
+
+  loans-api:
+    build: ./apis/loans-api
+    ports: ["5105:5105"]
+    environment:
+      PORT: 5105
+      API_CONTEXT: /loans/v1
+      API_NAME: loans-api
+
+  health-status-cache:
+    build: ./health-status-cache
+    profiles: ["platform"]
+    ports: ["6300:6300"]
+    environment:
+      PORT: 6300
+      DATA_DIR: /app/data
+    volumes:
+      - health-cache-data:/app/data
+
+  ui-platform:
+    build: ./ui
+    profiles: ["platform"]
+    ports: ["5174:5173"]
+    depends_on:
+      - wso2-integrator
+    environment:
+      VITE_STATUS_API_BASE_URL: http://localhost:5174
+      VITE_STATUS_API_PREFIX: /catalogue-status/v1
+      VITE_HEALTH_REGISTRY_PREFIX: /health-registry/v1
+
+  wso2-apim:
+    platform: linux/amd64
+    image: wso2/wso2am:4.7.0
+    container_name: wso2-apim-47
+    profiles: ["platform"]
+    ports:
+      - "9443:9443"
+      - "9763:9763"
+      - "8243:8243"
+      - "8280:8280"
+    environment:
+      JAVA_OPTS: "-Xms1024m -Xmx3072m"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -ksf https://localhost:9443/carbon >/dev/null || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 30
+      start_period: 180s
+
+  wso2-integrator:
+    platform: linux/amd64
+    image: wso2/wso2mi:4.6.0
+    container_name: wso2-integrator-mi
+    profiles: ["platform"]
+    ports:
+      - "8290:8290"
+      - "8253:8253"
+      - "9164:9164"
+    depends_on:
+      - accounts-api
+      - payments-api
+      - customers-api
+      - cards-api
+      - loans-api
+      - health-status-cache
+    volumes:
+      - ./wso2-integrator/catalogue-health-mi/src/main/wso2mi/artifacts/apis:/home/wso2carbon/wso2mi-4.6.0/repository/deployment/server/synapse-configs/default/api
+      - ./wso2-integrator/catalogue-health-mi/src/main/wso2mi/artifacts/sequences:/home/wso2carbon/wso2mi-4.6.0/repository/deployment/server/synapse-configs/default/sequences
+      - ./wso2-integrator/catalogue-health-mi/src/main/wso2mi/artifacts/tasks:/home/wso2carbon/wso2mi-4.6.0/repository/deployment/server/synapse-configs/default/tasks
+
+  apictl:
+    build:
+      context: .
+      dockerfile: tools/apictl/Dockerfile
+    container_name: wso2-apictl-runner
+    profiles: ["platform"]
+    depends_on:
+      wso2-apim:
+        condition: service_healthy
+    working_dir: /workspace
+    volumes:
+      - ./:/workspace
+      - apictl-home:/root/.wso2apictl
+    environment:
+      APIM_ENV: local-apim
+      APIM_HOST: https://wso2-apim:9443
+      APIM_USERNAME: admin
+      APIM_PASSWORD: admin
+      APIM_DRY_RUN_ONLY: "false"
+      MI_ARTIFACTS_ROOT: /workspace/wso2-integrator/catalogue-health-mi/src/main/wso2mi/artifacts
+      APIM_ALLOW_INSECURE_TLS: "true"
+      STATUS_CACHE_BASE_URL: http://health-status-cache:6300
+    entrypoint: ["/bin/bash", "-lc"]
+    command: "apictl version && tail -f /dev/null"
+
+volumes:
+  apictl-home:
+  health-cache-data:

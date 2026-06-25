@@ -1,0 +1,74 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "Cards API",
+    "version": "1.0.0",
+    "description": "Consulta de cart\u00f5es, limites e status operacional."
+  },
+  "servers": [
+    {
+      "url": "http://localhost:5104"
+    }
+  ],
+  "paths": {
+    "/health": {
+      "get": {
+        "summary": "Health endpoint",
+        "responses": {
+          "200": {
+            "description": "Health response"
+          },
+          "503": {
+            "description": "Service unavailable"
+          }
+        }
+      }
+    },
+    "/cards/{customerId}": {
+      "get": {
+        "summary": "Consultar cart\u00f5es do cliente",
+        "parameters": [
+          {
+            "name": "customerId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "404": {
+            "description": "Not found"
+          }
+        }
+      }
+    },
+    "/cards/{cardId}/limits": {
+      "get": {
+        "summary": "Consultar limites do cart\u00e3o",
+        "parameters": [
+          {
+            "name": "cardId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "404": {
+            "description": "Not found"
+          }
+        }
+      }
+    }
+  }
+}

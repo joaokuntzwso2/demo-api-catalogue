@@ -1,0 +1,55 @@
+name: API onboarding demo
+
+on:
+  workflow_dispatch:
+    inputs:
+      api_folder:
+        description: "API folder to deploy, or 'all'"
+        required: true
+        default: "all"
+  push:
+    paths:
+      - 'apis/**'
+      - 'catalog/apis/**'
+      - 'apictl/apis/**'
+      - 'pipeline/**'
+
+jobs:
+  validate-and-register:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm install
+      - name: Validate OpenAPI contracts
+        run: node pipeline/scripts/validate-openapi.js
+      - name: Governance metadata check
+        run: node pipeline/scripts/governance-check.js
+      - name: Install WSO2 API Controller 4.7.0
+        run: |
+          curl -fL https://github.com/wso2/product-apim-tooling/releases/download/v4.7.0/apictl-4.7.0-linux-amd64.tar.gz -o /tmp/apictl.tar.gz
+          mkdir -p /tmp/apictl
+          tar -xzf /tmp/apictl.tar.gz -C /tmp/apictl
+          sudo find /tmp/apictl -type f -name apictl -exec cp {} /usr/local/bin/apictl \;
+          sudo chmod +x /usr/local/bin/apictl
+          apictl version
+      - name: APICTL dry-run/import and health registration
+        env:
+          APIM_ENV: ${{ secrets.APIM_ENV }}
+          APIM_HOST: ${{ secrets.APIM_HOST }}
+          APIM_USERNAME: ${{ secrets.APIM_USERNAME }}
+          APIM_PASSWORD: ${{ secrets.APIM_PASSWORD }}
+          INTEGRATOR_BASE_URL: ${{ secrets.INTEGRATOR_BASE_URL }}
+          APIM_DRY_RUN_ONLY: ${{ vars.APIM_DRY_RUN_ONLY || 'true' }}
+        run: |
+          set -e
+          API_FOLDER="${{ github.event.inputs.api_folder || 'all' }}"
+          if [ "$API_FOLDER" = "all" ]; then
+            for api in accounts-api payments-api customers-api cards-api loans-api; do
+              bash pipeline/scripts/deploy-api-to-apim.sh "$api" || true
+            done
+          else
+            bash pipeline/scripts/deploy-api-to-apim.sh "$API_FOLDER"
+          fi

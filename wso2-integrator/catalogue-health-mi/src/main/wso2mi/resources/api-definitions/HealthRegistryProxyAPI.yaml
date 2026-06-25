@@ -1,0 +1,66 @@
+openapi: 3.0.1
+info:
+  title: HealthRegistryAPI
+  description: API Definition of HealthRegistryProxyAPI
+  version: 1.0.0
+servers:
+- url: http://localhost:8290/health-registry
+- url: https://localhost:8253/health-registry
+paths:
+  /v1/apis:
+    get:
+      responses:
+        default:
+          description: Default response
+    post:
+      requestBody:
+        description: Sample Payload
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                payload:
+                  type: object
+          application/xml:
+            schema:
+              type: object
+              xml:
+                name: payload
+        required: false
+      responses:
+        default:
+          description: Default response
+  /v1/apis/{apiId}:
+    get:
+      parameters:
+      - name: apiId
+        in: path
+        required: true
+        style: simple
+        explode: false
+        schema:
+          type: string
+      responses:
+        default:
+          description: Default response
+  /v1/probes/run:
+    post:
+      requestBody:
+        description: Sample Payload
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                payload:
+                  type: object
+          application/xml:
+            schema:
+              type: object
+              xml:
+                name: payload
+        required: false
+      responses:
+        default:
+          description: Default response

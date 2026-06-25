@@ -1,0 +1,105 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "Loans API",
+    "version": "1.0.0",
+    "description": "Consulta de propostas, contratos e simulações de crédito."
+  },
+  "servers": [
+    {
+      "url": "http://localhost:5105"
+    }
+  ],
+  "paths": {
+    "/loans/v1/health": {
+      "get": {
+        "summary": "Health endpoint",
+        "responses": {
+          "200": {
+            "description": "Health response"
+          },
+          "503": {
+            "description": "Service unavailable"
+          }
+        }
+      }
+    },
+    "/loans/v1/__admin/health-mode": {
+      "post": {
+        "summary": "Demo-only health simulation endpoint",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "mode": {
+                    "type": "string",
+                    "enum": [
+                      "healthy",
+                      "degraded",
+                      "wrongPayload",
+                      "down"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Mode updated"
+          }
+        }
+      }
+    },
+    "/loans/v1/loans/{customerId}": {
+      "get": {
+        "summary": "Consultar empréstimos do cliente",
+        "parameters": [
+          {
+            "name": "customerId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "404": {
+            "description": "Not found"
+          }
+        }
+      }
+    },
+    "/loans/v1/loans/simulations": {
+      "post": {
+        "summary": "Simular proposta de crédito",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created"
+          },
+          "400": {
+            "description": "Invalid request"
+          }
+        }
+      }
+    }
+  }
+}

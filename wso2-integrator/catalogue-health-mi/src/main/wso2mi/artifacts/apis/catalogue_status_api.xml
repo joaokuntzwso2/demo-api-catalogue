@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<api xmlns="http://ws.apache.org/ns/synapse" name="CatalogueStatusAPI" context="/catalogue-status">
+    <resource methods="GET" uri-template="/v1/apis">
+        <inSequence>
+            <property name="REST_URL_POSTFIX" scope="axis2" action="remove"/>
+
+            <call blocking="true">
+                <endpoint>
+                    <http method="GET" uri-template="http://health-status-cache:6300/cache/results"/>
+                </endpoint>
+            </call>
+
+            <property name="messageType" value="application/json" scope="axis2" type="STRING"/>
+            <property name="ContentType" value="application/json" scope="axis2" type="STRING"/>
+            <respond/>
+        </inSequence>
+
+        <faultSequence>
+            <payloadFactory media-type="json">
+                <format>{
+                    "error": "Failed to retrieve last known API status from health status cache",
+                    "component": "CatalogueStatusAPI",
+                    "semantics": "read-only-last-known-mi-reading"
+                }</format>
+            </payloadFactory>
+            <property name="HTTP_SC" value="502" scope="axis2" type="STRING"/>
+            <property name="messageType" value="application/json" scope="axis2" type="STRING"/>
+            <property name="ContentType" value="application/json" scope="axis2" type="STRING"/>
+            <respond/>
+        </faultSequence>
+    </resource>
+
+    <resource methods="GET" uri-template="/v1/summary">
+        <inSequence>
+            <property name="REST_URL_POSTFIX" scope="axis2" action="remove"/>
+
+            <call blocking="true">
+                <endpoint>
+                    <http method="GET" uri-template="http://health-status-cache:6300/cache/summary"/>
+                </endpoint>
+            </call>
+
+            <property name="messageType" value="application/json" scope="axis2" type="STRING"/>
+            <property name="ContentType" value="application/json" scope="axis2" type="STRING"/>
+            <respond/>
+        </inSequence>
+
+        <faultSequence>
+            <payloadFactory media-type="json">
+                <format>{
+                    "error": "Failed to retrieve last known API status summary from health status cache",
+                    "component": "CatalogueStatusAPI",
+                    "semantics": "read-only-last-known-mi-reading"
+                }</format>
+            </payloadFactory>
+            <property name="HTTP_SC" value="502" scope="axis2" type="STRING"/>
+            <property name="messageType" value="application/json" scope="axis2" type="STRING"/>
+            <property name="ContentType" value="application/json" scope="axis2" type="STRING"/>
+            <respond/>
+        </faultSequence>
+    </resource>
+</api>

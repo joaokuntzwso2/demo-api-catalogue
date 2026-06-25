@@ -1,0 +1,19 @@
+openapi: 3.0.1
+info:
+  title: CatalogueStatusAPI
+  description: API Definition of CatalogueStatusAPI
+  version: 1.0.0
+servers:
+- url: http://localhost:8290/catalogue-status
+- url: https://localhost:8253/catalogue-status
+paths:
+  /v1/apis:
+    get:
+      responses:
+        default:
+          description: Default response
+  /v1/summary:
+    get:
+      responses:
+        default:
+          description: Default response

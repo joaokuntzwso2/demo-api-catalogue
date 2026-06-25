@@ -1,0 +1,10 @@
+type: api_meta
+version: v4.4.0
+data:
+  name: customers-api
+  description: Consulta de dados cadastrais e perfil de cliente.
+  context: /customers/v1
+  version: 1.0.0
+  type: HTTP
+  provider: admin
+  lifeCycleStatus: PUBLISHED

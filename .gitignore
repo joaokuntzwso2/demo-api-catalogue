@@ -1,0 +1,49 @@
+# macOS
+.DS_Store
+
+# Node / npm
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Build outputs
+dist/
+build/
+coverage/
+
+# Environment / local config
+.env
+.env.local
+.env.*.local
+
+# Logs
+*.log
+logs/
+
+# Docker / local runtime
+.docker/
+tmp/
+.cache/
+
+# WSO2 / APICTL local state
+.wso2apictl/
+.exported/
+.imported/
+
+# Generated WSO2 Integrator artifacts
+# These are generated from API Manager metadata by sync-mi-health-from-apim.js
+wso2-integrator/catalogue-health-mi/src/main/wso2mi/artifacts/sequences/check_*.xml
+wso2-integrator/catalogue-health-mi/src/main/wso2mi/artifacts/sequences/run_all_health_checks.xml
+wso2-integrator/catalogue-health-mi/src/main/wso2mi/artifacts/sequences/run_tier*_health_checks.xml
+wso2-integrator/catalogue-health-mi/src/main/wso2mi/artifacts/tasks/scheduled_health_check.xml
+wso2-integrator/catalogue-health-mi/src/main/wso2mi/artifacts/tasks/scheduled_tier*_health_check.xml
+wso2-integrator/catalogue-health-mi/src/main/wso2mi/artifacts/apis/health_registry_api.xml
+
+# Keep source-controlled static MI API
+!wso2-integrator/catalogue-health-mi/src/main/wso2mi/artifacts/apis/catalogue_status_api.xml
+
+# Keep empty generated artifact folders
+!wso2-integrator/catalogue-health-mi/src/main/wso2mi/artifacts/sequences/.gitkeep
+!wso2-integrator/catalogue-health-mi/src/main/wso2mi/artifacts/tasks/.gitkeep

@@ -1,0 +1,38 @@
+{
+  "apiId": "customers-api-v1",
+  "name": "Customers API",
+  "version": "1.0.0",
+  "description": "Consulta de dados cadastrais e perfil de cliente.",
+  "domain": "Customer Management",
+  "owner": {
+    "team": "Customer Data Team",
+    "email": "customer-data@bank.demo"
+  },
+  "criticality": "Tier 1",
+  "slaTarget": "99.80",
+  "runtime": "Azure / AKS",
+  "lifecycle": "PUBLISHED",
+  "gatewayUrl": "http://localhost:5103/customers/v1",
+  "backendBaseUrl": "http://customers-api:5103/customers/v1",
+  "healthStrategy": {
+    "type": "liveness_and_contract",
+    "method": "GET",
+    "path": "/health",
+    "expectedHttpStatus": 200,
+    "timeoutMs": 2500,
+    "expectedPayload": {
+      "status": "UP",
+      "service": "customers-api"
+    },
+    "requiredFields": [
+      "status",
+      "service",
+      "timestamp",
+      "checks.database"
+    ]
+  },
+  "links": {
+    "documentation": "/devportal/apis/customers-api-v1",
+    "support": "mailto:customer-data@bank.demo"
+  }
+}

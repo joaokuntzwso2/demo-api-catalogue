@@ -1,0 +1,74 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "Accounts API",
+    "version": "1.0.0",
+    "description": "Consulta de contas, saldos e transa\u00e7\u00f5es de clientes."
+  },
+  "servers": [
+    {
+      "url": "http://localhost:5101"
+    }
+  ],
+  "paths": {
+    "/health": {
+      "get": {
+        "summary": "Health endpoint",
+        "responses": {
+          "200": {
+            "description": "Health response"
+          },
+          "503": {
+            "description": "Service unavailable"
+          }
+        }
+      }
+    },
+    "/accounts/{customerId}": {
+      "get": {
+        "summary": "Consultar contas do cliente",
+        "parameters": [
+          {
+            "name": "customerId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "404": {
+            "description": "Not found"
+          }
+        }
+      }
+    },
+    "/accounts/{accountId}/transactions": {
+      "get": {
+        "summary": "Consultar transa\u00e7\u00f5es da conta",
+        "parameters": [
+          {
+            "name": "accountId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "404": {
+            "description": "Not found"
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,10 @@
+---
+key: "CatalogueStatusAPI-1.0.0"
+name : "CatalogueStatusAPI"
+displayName : "CatalogueStatusAPI"
+description: "CatalogueStatusAPI"
+version: "1.0.0"
+serviceUrl: "https://{MI_HOST}:{MI_PORT}catalogue-status"
+definitionType: "OAS3"
+securityType: "BASIC"
+mutualSSLEnabled: false

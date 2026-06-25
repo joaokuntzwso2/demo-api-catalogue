@@ -1,0 +1,38 @@
+{
+  "apiId": "payments-api-v1",
+  "name": "Payments API",
+  "version": "1.0.0",
+  "description": "Iniciação e consulta de pagamentos internos e instantâneos.",
+  "domain": "Payments",
+  "owner": {
+    "team": "Payments Platform",
+    "email": "payments-platform@bank.demo"
+  },
+  "criticality": "Tier 0",
+  "slaTarget": "99.95",
+  "runtime": "AWS / EKS",
+  "lifecycle": "PUBLISHED",
+  "gatewayUrl": "http://localhost:5102/payments/v1",
+  "backendBaseUrl": "http://payments-api:5102/payments/v1",
+  "healthStrategy": {
+    "type": "liveness_and_contract",
+    "method": "GET",
+    "path": "/health",
+    "expectedHttpStatus": 200,
+    "timeoutMs": 2500,
+    "expectedPayload": {
+      "status": "UP",
+      "service": "payments-api"
+    },
+    "requiredFields": [
+      "status",
+      "service",
+      "timestamp",
+      "checks.database"
+    ]
+  },
+  "links": {
+    "documentation": "/devportal/apis/payments-api-v1",
+    "support": "mailto:payments-platform@bank.demo"
+  }
+}
