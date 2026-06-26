@@ -34,42 +34,42 @@ data:
     advertised: false
     vendor: WSO2
   additionalProperties:
-    - name: health_enabled
-      value: "true"
-      display: true
-    - name: health_backend_url
-      value: "http://payments-api:5102"
-      display: false
-    - name: health_path
-      value: "/payments/v1/health"
-      display: true
-    - name: health_method
-      value: "GET"
-      display: true
-    - name: health_expected_http_status
-      value: "200"
-      display: true
-    - name: health_expected_payload_json
-      value: '{"status":"UP","service":"payments-api"}'
-      display: true
-    - name: health_required_fields
-      value: "status,service,timestamp"
-      display: true
-    - name: health_sla_target
-      value: "99.99%"
-      display: true
-    - name: health_criticality
-      value: "Tier 0"
-      display: true
-    - name: health_runtime
-      value: "AWS"
-      display: true
-    - name: health_domain
-      value: "Payments"
-      display: true
-    - name: health_owner_team
-      value: "Payments Platform Team"
-      display: true
-    - name: health_owner_email
-      value: "payments-platform@bank.example"
-      display: true
+  - name: health_enabled
+    value: "true"
+    display: true
+  - name: health_backend_url
+    value: "http://payments-api:5102"
+    display: true
+  - name: health_path
+    value: "/payments/v1/health"
+    display: true
+  - name: health_method
+    value: "GET"
+    display: true
+  - name: health_expected_http_status
+    value: "200"
+    display: true
+  - name: health_expected_payload_json
+    value: '{"status":"UP","service":"payments-api"}'
+    display: true
+  - name: health_required_fields
+    value: "status,service"
+    display: true
+  - name: health_sla_target
+    value: "300"
+    display: true
+  - name: health_criticality
+    value: "Tier 0"
+    display: true
+  - name: health_runtime
+    value: "Docker Compose"
+    display: true
+  - name: health_domain
+    value: "Payments"
+    display: true
+  - name: health_owner_team
+    value: "Payments Platform"
+    display: true
+  - name: health_owner_email
+    value: "payments-platform@example.com"
+    display: true

@@ -7,6 +7,11 @@ export default defineConfig({
     host: '0.0.0.0',
     port: 5173,
     proxy: {
+        '/api/contract-validation': {
+          target: 'http://host.docker.internal:6400',
+          changeOrigin: true,
+          secure: false
+        },
       '/catalogue-status/v1/apis': {
         target: 'http://health-status-cache:6300',
         changeOrigin: true,

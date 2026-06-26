@@ -1,0 +1,132 @@
+{
+  "accounts-api": {
+    "request": {
+      "method": "GET",
+      "path": "/accounts/v1/accounts/CUST-BR-002",
+      "headers": {},
+      "query": {},
+      "body": null
+    },
+    "expectedHttpStatus": 200,
+    "expectedPayload": {
+      "service": "accounts-api",
+      "data": [
+        {
+          "accountId": "ACC-1001",
+          "customerId": "CUST-BR-002",
+          "type": "CHECKING",
+          "status": "ACTIVE"
+        }
+      ]
+    },
+    "requiredFields": [
+      "traceId",
+      "service",
+      "timestamp",
+      "data"
+    ]
+  },
+  "payments-api": {
+    "request": {
+      "method": "GET",
+      "path": "/payments/v1/payments/PAY-1001",
+      "headers": {},
+      "query": {},
+      "body": null
+    },
+    "expectedHttpStatus": 200,
+    "expectedPayload": {
+      "service": "payments-api",
+      "data": {
+        "paymentId": "PAY-1001",
+        "type": "PIX",
+        "currency": "BRL",
+        "status": "AUTHORIZED"
+      }
+    },
+    "requiredFields": [
+      "traceId",
+      "service",
+      "timestamp",
+      "data"
+    ]
+  },
+  "customers-api": {
+    "request": {
+      "method": "GET",
+      "path": "/customers/v1/customers/CUST-BR-002",
+      "headers": {},
+      "query": {},
+      "body": null
+    },
+    "expectedHttpStatus": 200,
+    "expectedPayload": {
+      "service": "customers-api",
+      "data": {
+        "customerId": "CUST-BR-002",
+        "name": "Maria Oliveira",
+        "kycStatus": "VERIFIED"
+      }
+    },
+    "requiredFields": [
+      "traceId",
+      "service",
+      "timestamp",
+      "data"
+    ]
+  },
+  "cards-api": {
+    "request": {
+      "method": "GET",
+      "path": "/cards/v1/cards/CUST-BR-002",
+      "headers": {},
+      "query": {},
+      "body": null
+    },
+    "expectedHttpStatus": 200,
+    "expectedPayload": {
+      "service": "cards-api",
+      "data": [
+        {
+          "cardId": "CARD-1001",
+          "customerId": "CUST-BR-002",
+          "brand": "VISA",
+          "status": "ACTIVE"
+        }
+      ]
+    },
+    "requiredFields": [
+      "traceId",
+      "service",
+      "timestamp",
+      "data"
+    ]
+  },
+  "loans-api": {
+    "request": {
+      "method": "GET",
+      "path": "/loans/v1/loans/CUST-BR-002",
+      "headers": {},
+      "query": {},
+      "body": null
+    },
+    "expectedHttpStatus": 200,
+    "expectedPayload": {
+      "service": "loans-api",
+      "data": [
+        {
+          "loanId": "LOAN-1001",
+          "customerId": "CUST-BR-002",
+          "product": "PERSONAL_CREDIT",
+          "status": "CLOSED"
+        }
+      ]
+    },
+    "requiredFields": [
+      "traceId",
+      "service",
+      "timestamp",
+      "data"
+    ]
+  }
+}

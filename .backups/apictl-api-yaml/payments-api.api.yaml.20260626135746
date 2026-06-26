@@ -1,0 +1,75 @@
+type: api
+version: v4.4.0
+data:
+  id: null
+  name: payments-api
+  description: Iniciação e consulta de pagamentos internos e instantâneos.
+  context: /payments/v1
+  version: 1.0.0
+  provider: admin
+  type: HTTP
+  transport:
+    - https
+  visibility: PUBLIC
+  endpointImplementationType: ENDPOINT
+  endpointConfig:
+    endpoint_type: http
+    production_endpoints:
+      url: http://payments-api:5102/payments/v1
+    sandbox_endpoints:
+      url: http://payments-api:5102/payments/v1
+  policies:
+    - Unlimited
+  lifeCycleStatus: PUBLISHED
+  tags:
+    - demo
+    - payments
+    - tier-0
+  businessInformation:
+    businessOwner: Payments Platform
+    businessOwnerEmail: payments-platform@bank.demo
+    technicalOwner: Payments Platform
+    technicalOwnerEmail: payments-platform@bank.demo
+  advertiseInfo:
+    advertised: false
+    vendor: WSO2
+  additionalProperties:
+    - name: health_enabled
+      value: "true"
+      display: true
+    - name: health_backend_url
+      value: "http://payments-api:5102"
+      display: false
+    - name: health_path
+      value: "/payments/v1/health"
+      display: true
+    - name: health_method
+      value: "GET"
+      display: true
+    - name: health_expected_http_status
+      value: "200"
+      display: true
+    - name: health_expected_payload_json
+      value: '{"status":"UP","service":"payments-api"}'
+      display: true
+    - name: health_required_fields
+      value: "status,service,timestamp"
+      display: true
+    - name: health_sla_target
+      value: "99.99%"
+      display: true
+    - name: health_criticality
+      value: "Tier 0"
+      display: true
+    - name: health_runtime
+      value: "AWS"
+      display: true
+    - name: health_domain
+      value: "Payments"
+      display: true
+    - name: health_owner_team
+      value: "Payments Platform Team"
+      display: true
+    - name: health_owner_email
+      value: "payments-platform@bank.example"
+      display: true - name: contract_enabled value: "true" display: true - name: contract_method value: "GET" display: true - name: contract_path value: "/payments/v1/payments/PAY-1001" display: true - name: contract_expected_http_status value: "200" display: true - name: contract_expected_payload_json value: '{"service":"payments-api","data":{"paymentId":"PAY-1001","type":"PIX","currency":"BRL","status":"AUTHORIZED"}}' display: true - name: contract_required_fields value: "traceId,service,timestamp,data" display: true - name: contract_request_json value: '{"method":"GET","path":"/payments/v1/payments/PAY-1001","headers":{},"query":{},"body":null}' display: true

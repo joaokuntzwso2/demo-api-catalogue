@@ -194,3 +194,262 @@
   color: #e2e8f0;
   font-size: 0.82rem;
 }
+
+.onboarding-modal__payloads {
+  margin-top: 18px;
+  padding: 16px;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.66);
+  border: 1px solid rgba(148, 163, 184, 0.35);
+}
+
+.onboarding-modal__payloads h3 {
+  margin: 0 0 6px;
+}
+
+.onboarding-modal__payloads p {
+  margin: 0 0 14px;
+  opacity: 0.78;
+}
+
+.onboarding-modal__payloads code {
+  padding: 2px 6px;
+  border-radius: 6px;
+  background: rgba(15, 23, 42, 0.08);
+}
+
+.onboarding-modal__payload-editor {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.onboarding-modal__payload-title {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+}
+
+.onboarding-modal__payload-title span {
+  font-size: 0.82rem;
+  opacity: 0.68;
+}
+
+.onboarding-modal__payload-editor textarea {
+  width: 100%;
+  min-height: 120px;
+  resize: vertical;
+  border: 1px solid rgba(148, 163, 184, 0.55);
+  border-radius: 12px;
+  padding: 12px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.85rem;
+  background: #ffffff;
+  color: #0f172a;
+}
+
+.onboarding-modal__payload-editor textarea::placeholder {
+  color: #64748b;
+  opacity: 0.85;
+}
+
+.onboarding-modal__payload-editor small {
+  opacity: 0.68;
+  overflow-wrap: anywhere;
+}
+
+.onboarding-modal__payload-actions {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+}
+
+.onboarding-modal__tiny-button {
+  border: 0;
+  border-radius: 9px;
+  padding: 7px 10px;
+  cursor: pointer;
+  font-weight: 700;
+  background: rgba(15, 23, 42, 0.08);
+  color: #172033;
+}
+
+.onboarding-modal__tiny-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.onboarding-modal__payloads {
+  margin-top: 18px;
+  padding: 16px;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.66);
+  border: 1px solid rgba(148, 163, 184, 0.35);
+}
+
+.onboarding-modal__payloads h3 {
+  margin: 0 0 6px;
+}
+
+.onboarding-modal__payloads p {
+  margin: 0 0 14px;
+  opacity: 0.78;
+}
+
+.onboarding-modal__payloads code {
+  padding: 2px 6px;
+  border-radius: 6px;
+  background: rgba(15, 23, 42, 0.08);
+}
+
+.onboarding-modal__payload-editor {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.onboarding-modal__payload-title {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+}
+
+.onboarding-modal__payload-title span {
+  font-size: 0.82rem;
+  opacity: 0.68;
+}
+
+.onboarding-modal__payload-editor textarea {
+  width: 100%;
+  min-height: 130px;
+  resize: vertical;
+  border: 1px solid rgba(148, 163, 184, 0.55);
+  border-radius: 12px;
+  padding: 12px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.85rem;
+  background: #ffffff;
+  color: #0f172a;
+}
+
+.onboarding-modal__payload-actions {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+}
+
+.onboarding-modal__tiny-button {
+  border: 0;
+  border-radius: 9px;
+  padding: 7px 10px;
+  cursor: pointer;
+  font-weight: 700;
+  background: rgba(15, 23, 42, 0.08);
+  color: #172033;
+}
+
+.onboarding-modal__contracts {
+  margin-top: 18px;
+  padding: 16px;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.66);
+  border: 1px solid rgba(148, 163, 184, 0.35);
+}
+
+.onboarding-modal__contracts h3 {
+  margin: 0 0 6px;
+}
+
+.onboarding-modal__contracts p {
+  margin: 0 0 14px;
+  opacity: 0.78;
+}
+
+.onboarding-modal__contracts code {
+  padding: 2px 6px;
+  border-radius: 6px;
+  background: rgba(15, 23, 42, 0.08);
+}
+
+.onboarding-modal__contract-editor {
+  display: grid;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.onboarding-modal__contract-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 14px;
+}
+
+.onboarding-modal__contract-column {
+  min-width: 0;
+  display: grid;
+  gap: 8px;
+}
+
+.onboarding-modal__contract-column-header {
+  font-size: 0.9rem;
+}
+
+.onboarding-modal__contract-column textarea {
+  width: 100%;
+  min-height: 210px;
+  resize: vertical;
+  border: 1px solid rgba(148, 163, 184, 0.55);
+  border-radius: 12px;
+  padding: 12px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.82rem;
+  background: #ffffff;
+  color: #0f172a;
+}
+
+.onboarding-modal__payload-title {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+}
+
+.onboarding-modal__payload-title span {
+  font-size: 0.82rem;
+  opacity: 0.68;
+}
+
+.onboarding-modal__payload-actions {
+  display: grid;
+  gap: 6px;
+}
+
+.onboarding-modal__payload-actions small {
+  opacity: 0.68;
+  overflow-wrap: anywhere;
+}
+
+.onboarding-modal__tiny-button {
+  justify-self: start;
+  border: 0;
+  border-radius: 9px;
+  padding: 7px 10px;
+  cursor: pointer;
+  font-weight: 700;
+  background: rgba(15, 23, 42, 0.08);
+  color: #172033;
+}
+
+.onboarding-modal__tiny-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+@media (max-width: 920px) {
+  .onboarding-modal__contract-grid {
+    grid-template-columns: 1fr;
+  }
+}

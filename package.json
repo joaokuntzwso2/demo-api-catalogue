@@ -47,7 +47,9 @@
     "platform:control": "node platform-control/server.js",
     "platform:ui:install-onboarding-panel": "node scripts/install-ui-onboarding-panel.js",
     "platform:control:start": "bash scripts/start-platform-control.sh",
-    "platform:control:stop": "bash scripts/stop-platform-control.sh"
+    "platform:control:stop": "bash scripts/stop-platform-control.sh",
+    "platform:payload-overrides:show": "cat .runtime/health-payload-overrides.json 2>/dev/null || echo \"{}\"",
+    "platform:payload-overrides:reset": "rm -f .runtime/health-payload-overrides.json && echo \"Local health payload overrides cleared.\""
   },
   "workspaces": [
     "apis/*",

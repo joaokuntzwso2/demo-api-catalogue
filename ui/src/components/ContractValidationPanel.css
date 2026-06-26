@@ -1,0 +1,161 @@
+.contract-validation-launcher {
+  position: fixed;
+  right: 24px;
+  bottom: 86px;
+  z-index: 40;
+  cursor: pointer;
+  padding: 12px 18px;
+  border: 0;
+  border-radius: 999px;
+  font-weight: 700;
+  background: #172554;
+  color: #ffffff;
+  box-shadow: 0 12px 28px rgba(15, 23, 42, 0.22);
+}
+
+.contract-validation-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+}
+
+.contract-validation-modal__backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.52);
+}
+
+.contract-validation-modal__panel {
+  position: absolute;
+  inset: 32px;
+  display: flex;
+  flex-direction: column;
+  padding: 24px;
+  border-radius: 18px;
+  overflow: auto;
+  background: #eef2f7;
+  color: #0f172a;
+  box-shadow: 0 24px 80px rgba(15, 23, 42, 0.34);
+}
+
+.contract-validation-modal__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.contract-validation-modal__header h2 {
+  margin: 0 0 6px;
+}
+
+.contract-validation-modal__header p {
+  margin: 0;
+  color: #475569;
+}
+
+.contract-validation-modal__header-actions,
+.contract-validation-modal__actions {
+  display: flex;
+  gap: 12px;
+}
+
+.contract-validation-modal button {
+  cursor: pointer;
+  padding: 10px 14px;
+  border-radius: 10px;
+  border: 1px solid rgba(15, 23, 42, 0.14);
+  font-weight: 700;
+  background: #ffffff;
+  color: #0f172a;
+}
+
+.contract-validation-modal__toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-top: 18px;
+}
+
+.contract-validation-modal__toolbar label {
+  display: grid;
+  gap: 6px;
+  min-width: 320px;
+  font-weight: 700;
+}
+
+.contract-validation-modal__toolbar select {
+  padding: 10px 12px;
+  border-radius: 10px;
+}
+
+.contract-validation-modal__meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  color: #475569;
+  font-size: 0.92rem;
+}
+
+.contract-validation-modal__grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 16px;
+  margin-top: 18px;
+}
+
+.contract-validation-modal__grid label {
+  display: grid;
+  gap: 8px;
+  font-weight: 700;
+}
+
+.contract-validation-modal__grid textarea {
+  min-height: 360px;
+  resize: vertical;
+  padding: 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(15, 23, 42, 0.22);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 0.85rem;
+  line-height: 1.45;
+}
+
+.contract-validation-modal__actions {
+  margin-top: 16px;
+}
+
+.contract-validation-modal__actions button {
+  background: #172554;
+  color: #ffffff;
+}
+
+.contract-validation-modal__message {
+  margin-top: 14px;
+}
+
+.contract-validation-modal__result {
+  margin-top: 14px;
+  padding: 14px;
+  border-radius: 12px;
+  overflow: auto;
+  background: #0f172a;
+  color: #e2e8f0;
+}
+
+@media (max-width: 920px) {
+  .contract-validation-modal__panel {
+    inset: 12px;
+  }
+
+  .contract-validation-modal__grid {
+    grid-template-columns: 1fr;
+  }
+
+  .contract-validation-modal__toolbar,
+  .contract-validation-modal__header {
+    align-items: stretch;
+    flex-direction: column;
+  }
+}

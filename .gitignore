@@ -47,3 +47,6 @@ wso2-integrator/catalogue-health-mi/src/main/wso2mi/artifacts/apis/health_regist
 # Keep empty generated artifact folders
 !wso2-integrator/catalogue-health-mi/src/main/wso2mi/artifacts/sequences/.gitkeep
 !wso2-integrator/catalogue-health-mi/src/main/wso2mi/artifacts/tasks/.gitkeep
+
+# Local demo runtime overrides
+.runtime/

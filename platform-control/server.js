@@ -4,8 +4,10 @@
  *
  * Exposes a small HTTP API for the browser UI to:
  * - list API onboarding options that are not yet onboarded;
+ * - show/edit safe local expected contract response payload overrides;
  * - run whitelisted npm onboarding scripts;
- * - stream real-time logs through Server-Sent Events.
+ * - stream real-time logs through Server-Sent Events;
+ * - wait until MI and the UI catalogue route are ready before reporting success.
  *
  * This is intended for local demo usage only.
  */
@@ -13,10 +15,25 @@
 const http = require('http');
 const { spawn } = require('child_process');
 const crypto = require('crypto');
+const fs = require('fs');
 const path = require('path');
 
 const PORT = Number(process.env.PLATFORM_CONTROL_PORT || 6400);
 const REPO_ROOT = path.resolve(__dirname, '..');
+
+const RUNTIME_DIR = path.join(REPO_ROOT, '.runtime');
+
+const REQUEST_OVERRIDES_FILE =
+  process.env.CONTRACT_REQUEST_OVERRIDES_FILE ||
+  path.join(RUNTIME_DIR, 'contract-request-overrides.json');
+
+const PAYLOAD_OVERRIDES_FILE =
+  process.env.CONTRACT_PAYLOAD_OVERRIDES_FILE ||
+  path.join(RUNTIME_DIR, 'contract-payload-overrides.json');
+
+const CONTRACT_DEFAULTS_FILE =
+  process.env.CONTRACT_DEFAULTS_FILE ||
+  path.join(REPO_ROOT, 'pipeline', 'config', 'contract-defaults.json');
 
 const HEALTH_REGISTRY_URL =
   process.env.HEALTH_REGISTRY_URL || 'http://localhost:8290/health-registry/v1/apis';
@@ -103,6 +120,452 @@ function readBody(req) {
   });
 }
 
+function ensureRuntimeDir() {
+  fs.mkdirSync(RUNTIME_DIR, { recursive: true });
+}
+
+function stableJson(value) {
+  if (value === null || typeof value !== 'object') {
+    return JSON.stringify(value);
+  }
+
+  if (Array.isArray(value)) {
+    return `[${value.map(stableJson).join(',')}]`;
+  }
+
+  return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${stableJson(value[key])}`).join(',')}}`;
+}
+
+function readPayloadOverrideStore() {
+  ensureRuntimeDir();
+
+  if (!fs.existsSync(PAYLOAD_OVERRIDES_FILE)) {
+    return {
+      version: 1,
+      updatedAt: null,
+      overrides: {}
+    };
+  }
+
+  try {
+    const payload = JSON.parse(fs.readFileSync(PAYLOAD_OVERRIDES_FILE, 'utf8'));
+    return {
+      version: payload.version || 1,
+      updatedAt: payload.updatedAt || null,
+      overrides: payload.overrides || {}
+    };
+  } catch (e) {
+    throw new Error(`Invalid payload override file ${PAYLOAD_OVERRIDES_FILE}: ${e.message}`);
+  }
+}
+
+function writePayloadOverrideStore(store) {
+  ensureRuntimeDir();
+
+  const nextStore = {
+    version: 1,
+    updatedAt: new Date().toISOString(),
+    overrides: store.overrides || {}
+  };
+
+  fs.writeFileSync(PAYLOAD_OVERRIDES_FILE, JSON.stringify(nextStore, null, 2) + '\n');
+  return nextStore;
+}
+
+function escapeRegExp(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function stripYamlQuotes(value) {
+  let next = String(value || '').trim();
+
+  if (
+    (next.startsWith("'") && next.endsWith("'")) ||
+    (next.startsWith('"') && next.endsWith('"'))
+  ) {
+    next = next.slice(1, -1);
+  }
+
+  return next.trim();
+}
+
+function readApiYamlProperty(apiName, propertyName) {
+  const file = path.join(REPO_ROOT, 'apictl', 'apis', apiName, 'api.yaml');
+
+  if (!fs.existsSync(file)) {
+    return null;
+  }
+
+  const yaml = fs.readFileSync(file, 'utf8');
+  const escapedProperty = String(propertyName).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+  /*
+   * APICTL exports this demo YAML in a compact single-line format.
+   * So instead of depending on strict YAML indentation, find the property name
+   * and then read the first value: token after it.
+   */
+  const propertyMatch = yaml.match(new RegExp(`name:\\s*['"]?${escapedProperty}['"]?`, 'i'));
+
+  if (!propertyMatch || propertyMatch.index === undefined) {
+    return null;
+  }
+
+  const tail = yaml.slice(propertyMatch.index, propertyMatch.index + 2000);
+  const nextPropertyOffset = tail.slice(1).search(/\s+-\s+name:\s*/);
+  const section = nextPropertyOffset === -1
+    ? tail
+    : tail.slice(0, nextPropertyOffset + 1);
+
+  const singleQuoted = section.match(/\bvalue:\s*'([^']*)'/s);
+  if (singleQuoted) {
+    return singleQuoted[1].trim();
+  }
+
+  const doubleQuoted = section.match(/\bvalue:\s*"([^"]*)"/s);
+  if (doubleQuoted) {
+    return doubleQuoted[1].trim();
+  }
+
+  const plain = section.match(/\bvalue:\s*([^\r\n]+?)(?:\s+display:|\s+-\s+name:|$)/s);
+  if (plain) {
+    return String(plain[1] || '').trim();
+  }
+
+  return null;
+}
+
+function getDefaultExpectedPayloadForApi(apiName) {
+  const config = getContractDefaultConfig(apiName);
+
+  if (Object.prototype.hasOwnProperty.call(config, 'expectedPayload')) {
+    return config.expectedPayload;
+  }
+
+  const raw = readApiYamlProperty(apiName, 'contract_expected_payload_json');
+
+  if (!raw) {
+    return {};
+  }
+
+  try {
+    return JSON.parse(raw);
+  } catch (e) {
+    console.warn(
+      `[platform-control] Could not parse contract_expected_payload_json for ${apiName}: ${e.message}`
+    );
+    return {};
+  }
+}
+
+function getPayloadStateForApi(apiName) {
+  const store = readPayloadOverrideStore();
+  const entry = store.overrides[apiName];
+  const defaultPayload = getDefaultExpectedPayloadForApi(apiName);
+  const overridePayload = entry?.expectedPayload;
+
+  return {
+    api: apiName,
+    defaultPayload,
+    overridePayload: overridePayload ?? null,
+    effectivePayload: overridePayload ?? defaultPayload,
+    hasOverride: overridePayload !== undefined,
+    overrideFile: PAYLOAD_OVERRIDES_FILE
+  };
+}
+
+function getPayloadStatesForApis(apiNames) {
+  return Object.fromEntries(
+    apiNames.map((apiName) => [apiName, getPayloadStateForApi(apiName)])
+  );
+}
+
+function parsePayloadOverrideValue(apiName, value) {
+  if (value === undefined) {
+    return undefined;
+  }
+
+  if (value === null) {
+    return null;
+  }
+
+  if (typeof value === 'object') {
+    return value;
+  }
+
+  const raw = String(value || '').trim();
+
+  if (!raw) {
+    return null;
+  }
+
+  try {
+    return JSON.parse(raw);
+  } catch (e) {
+    throw new Error(`Invalid JSON expected payload for ${apiName}: ${e.message}`);
+  }
+}
+
+function writePayloadOverridesForApis(apiNames, payloadOverrides = {}) {
+  const store = readPayloadOverrideStore();
+  const changed = [];
+  const cleared = [];
+
+  for (const apiName of apiNames) {
+    if (!Object.prototype.hasOwnProperty.call(payloadOverrides, apiName)) {
+      continue;
+    }
+
+    const parsed = parsePayloadOverrideValue(apiName, payloadOverrides[apiName]);
+
+    if (parsed === undefined) {
+      continue;
+    }
+
+    if (parsed === null) {
+      if (store.overrides[apiName]) {
+        delete store.overrides[apiName];
+        cleared.push(apiName);
+      }
+      continue;
+    }
+
+    const defaultPayload = getDefaultExpectedPayloadForApi(apiName);
+
+    if (stableJson(parsed) === stableJson(defaultPayload)) {
+      if (store.overrides[apiName]) {
+        delete store.overrides[apiName];
+        cleared.push(apiName);
+      }
+      continue;
+    }
+
+    store.overrides[apiName] = {
+      expectedPayload: parsed,
+      updatedAt: new Date().toISOString(),
+      source: 'ui-onboarding-modal'
+    };
+
+    changed.push(apiName);
+  }
+
+  writePayloadOverrideStore(store);
+
+  return {
+    file: PAYLOAD_OVERRIDES_FILE,
+    changed,
+    cleared
+  };
+}
+
+
+
+function readContractDefaults() {
+  if (!fs.existsSync(CONTRACT_DEFAULTS_FILE)) {
+    return {};
+  }
+
+  try {
+    return JSON.parse(fs.readFileSync(CONTRACT_DEFAULTS_FILE, 'utf8'));
+  } catch (e) {
+    throw new Error(`Invalid contract defaults file ${CONTRACT_DEFAULTS_FILE}: ${e.message}`);
+  }
+}
+
+const CONTRACT_DEFAULTS = readContractDefaults();
+
+function getContractDefaultConfig(apiName) {
+  return CONTRACT_DEFAULTS[apiName] || {};
+}
+
+function normalizeContractRequest(value) {
+  const source = value && typeof value === 'object' ? value : {};
+
+  return {
+    method: String(source.method || 'GET').toUpperCase(),
+    path: String(source.path || '/'),
+    headers: source.headers && typeof source.headers === 'object' && !Array.isArray(source.headers)
+      ? source.headers
+      : {},
+    query: source.query && typeof source.query === 'object' && !Array.isArray(source.query)
+      ? source.query
+      : {},
+    body: Object.prototype.hasOwnProperty.call(source, 'body') ? source.body : null
+  };
+}
+
+function readRequestOverrideStore() {
+  ensureRuntimeDir();
+
+  if (!fs.existsSync(REQUEST_OVERRIDES_FILE)) {
+    return {
+      version: 1,
+      updatedAt: null,
+      overrides: {}
+    };
+  }
+
+  try {
+    const payload = JSON.parse(fs.readFileSync(REQUEST_OVERRIDES_FILE, 'utf8'));
+    return {
+      version: payload.version || 1,
+      updatedAt: payload.updatedAt || null,
+      overrides: payload.overrides || {}
+    };
+  } catch (e) {
+    throw new Error(`Invalid request override file ${REQUEST_OVERRIDES_FILE}: ${e.message}`);
+  }
+}
+
+function writeRequestOverrideStore(store) {
+  ensureRuntimeDir();
+
+  const nextStore = {
+    version: 1,
+    updatedAt: new Date().toISOString(),
+    overrides: store.overrides || {}
+  };
+
+  fs.writeFileSync(REQUEST_OVERRIDES_FILE, JSON.stringify(nextStore, null, 2) + '\n');
+  return nextStore;
+}
+
+function parseJsonProperty(raw, fallback) {
+  if (!raw) {
+    return fallback;
+  }
+
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return fallback;
+  }
+}
+
+function getDefaultContractRequestForApi(apiName) {
+  const config = getContractDefaultConfig(apiName);
+
+  if (config.request) {
+    return normalizeContractRequest(config.request);
+  }
+
+  const raw = readApiYamlProperty(apiName, 'contract_request_json');
+
+  if (raw) {
+    return normalizeContractRequest(parseJsonProperty(raw, {}));
+  }
+
+  return normalizeContractRequest({
+    method: readApiYamlProperty(apiName, 'contract_method') || 'GET',
+    path: readApiYamlProperty(apiName, 'contract_path') || '/',
+    headers: parseJsonProperty(readApiYamlProperty(apiName, 'contract_request_headers_json'), {}),
+    query: parseJsonProperty(readApiYamlProperty(apiName, 'contract_request_query_json'), {}),
+    body: parseJsonProperty(readApiYamlProperty(apiName, 'contract_request_body_json'), null)
+  });
+}
+
+function getRequestStateForApi(apiName) {
+  const store = readRequestOverrideStore();
+  const entry = store.overrides[apiName];
+  const defaultRequest = getDefaultContractRequestForApi(apiName);
+  const overrideRequest = entry?.request ? normalizeContractRequest(entry.request) : undefined;
+
+  return {
+    api: apiName,
+    defaultRequest,
+    overrideRequest: overrideRequest ?? null,
+    effectiveRequest: overrideRequest ?? defaultRequest,
+    hasOverride: overrideRequest !== undefined,
+    overrideFile: REQUEST_OVERRIDES_FILE
+  };
+}
+
+function getRequestStatesForApis(apiNames) {
+  return Object.fromEntries(
+    apiNames.map((apiName) => [apiName, getRequestStateForApi(apiName)])
+  );
+}
+
+function parseRequestOverrideValue(apiName, value) {
+  if (value === undefined) {
+    return undefined;
+  }
+
+  if (value === null) {
+    return null;
+  }
+
+  let parsed = value;
+
+  if (typeof value === 'string') {
+    const raw = value.trim();
+
+    if (!raw) {
+      return null;
+    }
+
+    try {
+      parsed = JSON.parse(raw);
+    } catch (e) {
+      throw new Error(`Invalid JSON contract request for ${apiName}: ${e.message}`);
+    }
+  }
+
+  return normalizeContractRequest(parsed);
+}
+
+function writeRequestOverridesForApis(apiNames, requestOverrides = {}) {
+  const store = readRequestOverrideStore();
+  const changed = [];
+  const cleared = [];
+
+  for (const apiName of apiNames) {
+    if (!Object.prototype.hasOwnProperty.call(requestOverrides, apiName)) {
+      continue;
+    }
+
+    const parsed = parseRequestOverrideValue(apiName, requestOverrides[apiName]);
+
+    if (parsed === undefined) {
+      continue;
+    }
+
+    if (parsed === null) {
+      if (store.overrides[apiName]) {
+        delete store.overrides[apiName];
+        cleared.push(apiName);
+      }
+      continue;
+    }
+
+    const defaultRequest = getDefaultContractRequestForApi(apiName);
+
+    if (stableJson(parsed) === stableJson(defaultRequest)) {
+      if (store.overrides[apiName]) {
+        delete store.overrides[apiName];
+        cleared.push(apiName);
+      }
+      continue;
+    }
+
+    store.overrides[apiName] = {
+      request: parsed,
+      updatedAt: new Date().toISOString(),
+      source: 'ui-onboarding-modal'
+    };
+
+    changed.push(apiName);
+  }
+
+  writeRequestOverrideStore(store);
+
+  return {
+    file: REQUEST_OVERRIDES_FILE,
+    changed,
+    cleared
+  };
+}
+
+
 async function getOnboardedApis() {
   try {
     const response = await fetch(HEALTH_REGISTRY_URL);
@@ -152,11 +615,17 @@ async function getOptions() {
     };
   });
 
+  const actionsWithPayloads = actions.map((action) => ({
+    ...action,
+    requests: getRequestStatesForApis(action.missingApis),
+    payloads: getPayloadStatesForApis(action.missingApis)
+  }));
+
   return {
     registry,
     onboardedApis: registry.onboarded,
-    actions,
-    availableActions: actions.filter((action) => action.enabled)
+    actions: actionsWithPayloads,
+    availableActions: actionsWithPayloads.filter((action) => action.enabled)
   };
 }
 
@@ -248,11 +717,7 @@ async function waitForApisInEndpoint(job, label, url, expectedApis, options = {}
   const intervalMs = options.intervalMs || READINESS_INTERVAL_MS;
   const deadline = Date.now() + timeoutMs;
 
-  appendLog(
-    job,
-    'system',
-    `Waiting for ${label}: ${expectedApis.join(', ')}\n`
-  );
+  appendLog(job, 'system', `Waiting for ${label}: ${expectedApis.join(', ')}\n`);
 
   let lastSeen = [];
 
@@ -278,11 +743,7 @@ async function waitForApisInEndpoint(job, label, url, expectedApis, options = {}
       const missingApis = expectedApis.filter((apiName) => !readyApis.includes(apiName));
 
       if (missingApis.length === 0) {
-        appendLog(
-          job,
-          'system',
-          `${label} is ready for: ${expectedApis.join(', ')}\n`
-        );
+        appendLog(job, 'system', `${label} is ready for: ${expectedApis.join(', ')}\n`);
         return;
       }
 
@@ -292,11 +753,7 @@ async function waitForApisInEndpoint(job, label, url, expectedApis, options = {}
         `${label} not ready yet. Missing: ${missingApis.join(', ')}. Seen: ${lastSeen.join(', ') || 'none'}\n`
       );
     } catch (e) {
-      appendLog(
-        job,
-        'system',
-        `${label} check failed: ${e.message}\n`
-      );
+      appendLog(job, 'system', `${label} check failed: ${e.message}\n`);
     }
 
     await sleepMs(intervalMs);
@@ -370,7 +827,38 @@ async function waitForOnboardingReadiness(job, expectedApis) {
   appendLog(job, 'system', '\nMI, Catalogue Status, and the UI route are fully ready.\n');
 }
 
-async function startJob(actionId) {
+
+function validateApictlMetadataBeforeImport(apiNames) {
+  for (const apiName of apiNames) {
+    const file = path.join(REPO_ROOT, 'apictl', 'apis', apiName, 'api.yaml');
+
+    if (!fs.existsSync(file)) {
+      throw new Error(`Missing APICTL metadata file: ${file}`);
+    }
+
+    const yaml = fs.readFileSync(file, 'utf8');
+
+    const malformedCompactContractProperty = yaml
+      .split(/\r?\n/)
+      .find((line) =>
+        /^\s*-\s+name:\s+contract_[A-Za-z0-9_:-]+[ \t]+value:/.test(line)
+      );
+
+    if (malformedCompactContractProperty) {
+      throw new Error(
+        `Malformed compact contract metadata in ${file}: ${malformedCompactContractProperty.trim()}. ` +
+        `Contract properties must be valid multiline YAML under additionalProperties.`
+      );
+    }
+
+    if (!yaml.includes('additionalProperties:')) {
+      throw new Error(`Missing additionalProperties section in ${file}`);
+    }
+  }
+}
+
+
+async function startJob(actionId, payloadOverrides = {}, requestOverrides = {}) {
   const action = ACTIONS.find((item) => item.id === actionId);
   if (!action) {
     throw new Error(`Unknown onboarding action: ${actionId}`);
@@ -382,6 +870,11 @@ async function startJob(actionId) {
   if (!option || !option.enabled) {
     throw new Error(`Nothing to onboard for action: ${actionId}`);
   }
+
+  validateApictlMetadataBeforeImport(option.missingApis);
+
+  const payloadOverrideResult = writePayloadOverridesForApis(option.missingApis, payloadOverrides);
+  const requestOverrideResult = writeRequestOverridesForApis(option.missingApis, requestOverrides);
 
   const id = crypto.randomUUID();
   const [command, args] = action.command;
@@ -407,7 +900,27 @@ async function startJob(actionId) {
 
   appendLog(job, 'system', `Starting ${job.command}\n`);
   appendLog(job, 'system', `Repository: ${REPO_ROOT}\n`);
-  appendLog(job, 'system', `Target APIs: ${option.missingApis.join(', ')}\n\n`);
+  appendLog(job, 'system', `Target APIs: ${option.missingApis.join(', ')}\n`);
+  appendLog(job, 'system', `Expected payload override file: ${payloadOverrideResult.file}\n`);
+  appendLog(job, 'system', `Contract request override file: ${requestOverrideResult.file}\n`);
+
+  if (requestOverrideResult.changed.length > 0) {
+    appendLog(job, 'system', `Using UI-edited contract request for: ${requestOverrideResult.changed.join(', ')}\n`);
+  }
+
+  if (requestOverrideResult.cleared.length > 0) {
+    appendLog(job, 'system', `Cleared local contract request override for: ${requestOverrideResult.cleared.join(', ')}\n`);
+  }
+
+  if (payloadOverrideResult.changed.length > 0) {
+    appendLog(job, 'system', `Using UI-edited expected payload for: ${payloadOverrideResult.changed.join(', ')}\n`);
+  }
+
+  if (payloadOverrideResult.cleared.length > 0) {
+    appendLog(job, 'system', `Cleared local expected payload override for: ${payloadOverrideResult.cleared.join(', ')}\n`);
+  }
+
+  appendLog(job, 'system', '\n');
 
   const child = spawn(command, args, {
     cwd: REPO_ROOT,
@@ -508,7 +1021,250 @@ function getJobPayload(job) {
   };
 }
 
+
+/* CONTRACT_VALIDATION_ROUTES_START */
+/*
+ * Contract validation editor endpoints for the native platform-control HTTP server.
+ */
+function contractValidationSendJson(res, statusCode, body) {
+  const json = JSON.stringify(body);
+
+  res.writeHead(statusCode, {
+    'Content-Type': 'application/json',
+    'Content-Length': Buffer.byteLength(json)
+  });
+
+  res.end(json);
+}
+
+function contractValidationReadJson(file, fallback = {}) {
+  if (!fs.existsSync(file)) {
+    return fallback;
+  }
+
+  try {
+    return JSON.parse(fs.readFileSync(file, 'utf8'));
+  } catch (e) {
+    throw new Error(`Invalid JSON file ${file}: ${e.message}`);
+  }
+}
+
+function contractValidationWriteJson(file, value) {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, JSON.stringify(value, null, 2) + '\n');
+}
+
+function contractValidationOverrideFor(apiName, overrides) {
+  if (Object.prototype.hasOwnProperty.call(overrides, apiName)) {
+    return overrides[apiName];
+  }
+
+  const versionedKey = `${apiName}:1.0.0`;
+  if (Object.prototype.hasOwnProperty.call(overrides, versionedKey)) {
+    return overrides[versionedKey];
+  }
+
+  return undefined;
+}
+
+function contractValidationRun(command, args = []) {
+  return new Promise((resolve) => {
+    const child = require('child_process').spawn(command, args, {
+      cwd: REPO_ROOT,
+      env: process.env,
+      shell: false
+    });
+
+    let stdout = '';
+    let stderr = '';
+
+    child.stdout.on('data', (data) => {
+      stdout += data.toString();
+    });
+
+    child.stderr.on('data', (data) => {
+      stderr += data.toString();
+    });
+
+    child.on('close', (code) => {
+      resolve({ code, stdout, stderr });
+    });
+  });
+}
+
+function contractValidationReadBody(req) {
+  return new Promise((resolve, reject) => {
+    let body = '';
+
+    req.on('data', (chunk) => {
+      body += chunk.toString();
+
+      if (body.length > 2 * 1024 * 1024) {
+        reject(new Error('Request body is too large'));
+        req.destroy();
+      }
+    });
+
+    req.on('end', () => resolve(body));
+    req.on('error', reject);
+  });
+}
+
+function contractValidationBuildOptions() {
+  const defaults = contractValidationReadJson(CONTRACT_DEFAULTS_FILE, {});
+  const requestOverrides = contractValidationReadJson(REQUEST_OVERRIDES_FILE, {});
+  const payloadOverrides = contractValidationReadJson(PAYLOAD_OVERRIDES_FILE, {});
+
+  const apis = Object.keys(defaults).sort().map((apiName) => {
+    const defaultConfig = defaults[apiName] || {};
+    const requestOverride = contractValidationOverrideFor(apiName, requestOverrides);
+    const payloadOverride = contractValidationOverrideFor(apiName, payloadOverrides);
+
+    return {
+      name: apiName,
+      defaultRequest: defaultConfig.request || {},
+      effectiveRequest: requestOverride || defaultConfig.request || {},
+      hasRequestOverride: requestOverride !== undefined,
+      defaultPayload: defaultConfig.expectedPayload || {},
+      effectivePayload: payloadOverride || defaultConfig.expectedPayload || {},
+      hasPayloadOverride: payloadOverride !== undefined,
+      expectedHttpStatus: defaultConfig.expectedHttpStatus || 200,
+      requiredFields: defaultConfig.requiredFields || []
+    };
+  });
+
+  return {
+    status: 'OK',
+    source: 'platform-control',
+    defaultsFile: CONTRACT_DEFAULTS_FILE,
+    requestOverridesFile: REQUEST_OVERRIDES_FILE,
+    payloadOverridesFile: PAYLOAD_OVERRIDES_FILE,
+    apis
+  };
+}
+
+function handleContractValidationRoute(req, res) {
+  const requestUrl = new URL(req.url, 'http://localhost');
+
+  if (requestUrl.pathname === '/api/contract-validation/options' && req.method === 'GET') {
+    try {
+      contractValidationSendJson(res, 200, contractValidationBuildOptions());
+    } catch (e) {
+      contractValidationSendJson(res, 500, {
+        status: 'ERROR',
+        message: e.message
+      });
+    }
+
+    return true;
+  }
+
+  if (requestUrl.pathname === '/api/contract-validation/jobs' && req.method === 'POST') {
+    contractValidationReadBody(req)
+      .then(async (rawBody) => {
+        let body = {};
+
+        try {
+          body = rawBody ? JSON.parse(rawBody) : {};
+        } catch (e) {
+          contractValidationSendJson(res, 400, {
+            status: 'ERROR',
+            message: `Invalid JSON request body: ${e.message}`
+          });
+          return;
+        }
+
+        const apiName = body.apiName;
+        const request = body.request;
+        const payload = body.payload;
+
+        if (!apiName) {
+          contractValidationSendJson(res, 400, {
+            status: 'ERROR',
+            message: 'apiName is required'
+          });
+          return;
+        }
+
+        if (!request || typeof request !== 'object') {
+          contractValidationSendJson(res, 400, {
+            status: 'ERROR',
+            message: 'request must be a JSON object'
+          });
+          return;
+        }
+
+        if (!payload || typeof payload !== 'object') {
+          contractValidationSendJson(res, 400, {
+            status: 'ERROR',
+            message: 'payload must be a JSON object'
+          });
+          return;
+        }
+
+        const requestOverrides = contractValidationReadJson(REQUEST_OVERRIDES_FILE, {});
+        const payloadOverrides = contractValidationReadJson(PAYLOAD_OVERRIDES_FILE, {});
+
+        requestOverrides[apiName] = request;
+        payloadOverrides[apiName] = payload;
+
+        contractValidationWriteJson(REQUEST_OVERRIDES_FILE, requestOverrides);
+        contractValidationWriteJson(PAYLOAD_OVERRIDES_FILE, payloadOverrides);
+
+        const reconcile = await contractValidationRun('npm', ['run', 'platform:reconcile-once']);
+
+        if (reconcile.code !== 0) {
+          contractValidationSendJson(res, 500, {
+            status: 'ERROR',
+            message: 'Reconcile failed',
+            apiName,
+            reconcile
+          });
+          return;
+        }
+
+        let probe = null;
+
+        try {
+          const probeResponse = await fetch('http://localhost:8290/health-registry/v1/probes/run', {
+            method: 'POST'
+          });
+          probe = await probeResponse.json();
+        } catch (e) {
+          probe = {
+            status: 'ERROR',
+            message: `Probe trigger failed: ${e.message}`
+          };
+        }
+
+        contractValidationSendJson(res, 200, {
+          status: 'COMPLETED',
+          message: 'Contract validation overrides saved, MI artifacts reconciled, and validation triggered',
+          apiName,
+          reconcile,
+          probe
+        });
+      })
+      .catch((e) => {
+        contractValidationSendJson(res, 500, {
+          status: 'ERROR',
+          message: e.message
+        });
+      });
+
+    return true;
+  }
+
+  return false;
+}
+/* CONTRACT_VALIDATION_ROUTES_END */
+
+
 const server = http.createServer(async (req, res) => {
+  if (handleContractValidationRoute(req, res)) {
+    return;
+  }
+
   try {
     const url = new URL(req.url, `http://${req.headers.host}`);
 
@@ -521,13 +1277,31 @@ const server = http.createServer(async (req, res) => {
       sendJson(res, 200, {
         status: 'UP',
         service: 'platform-control',
-        port: PORT
+        port: PORT,
+        payloadOverridesFile: PAYLOAD_OVERRIDES_FILE, requestOverridesFile: REQUEST_OVERRIDES_FILE, requestOverridesFile: REQUEST_OVERRIDES_FILE
       });
       return;
     }
 
     if (req.method === 'GET' && url.pathname === '/api/onboarding/options') {
       sendJson(res, 200, await getOptions());
+      return;
+    }
+
+    if (req.method === 'GET' && url.pathname === '/api/payload-overrides') {
+      sendJson(res, 200, readPayloadOverrideStore());
+      return;
+    }
+
+    if (req.method === 'DELETE' && url.pathname === '/api/payload-overrides') {
+      if (fs.existsSync(PAYLOAD_OVERRIDES_FILE)) {
+        fs.rmSync(PAYLOAD_OVERRIDES_FILE, { force: true });
+      }
+
+      sendJson(res, 200, {
+        status: 'CLEARED',
+        file: PAYLOAD_OVERRIDES_FILE
+      });
       return;
     }
 
@@ -542,7 +1316,7 @@ const server = http.createServer(async (req, res) => {
         return;
       }
 
-      const job = await startJob(actionId);
+      const job = await startJob(actionId, body.payloadOverrides || {}, body.requestOverrides || {});
       sendJson(res, 201, getJobPayload(job));
       return;
     }
@@ -581,4 +1355,7 @@ server.listen(PORT, () => {
   console.log(`Platform control server listening on http://localhost:${PORT}`);
   console.log(`Repo root: ${REPO_ROOT}`);
   console.log(`Health Registry URL: ${HEALTH_REGISTRY_URL}`);
+  console.log(`Catalogue Status URL: ${CATALOGUE_STATUS_URL}`);
+  console.log(`UI Catalogue Status URL: ${UI_CATALOGUE_STATUS_URL}`);
+  console.log(`Payload overrides file: ${PAYLOAD_OVERRIDES_FILE}`);
 });

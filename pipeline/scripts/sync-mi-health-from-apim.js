@@ -59,6 +59,439 @@ const TIER_CONFIG = {
   }
 };
 
+
+function resolvePayloadOverridesFile() {
+  if (process.env.HEALTH_PAYLOAD_OVERRIDES_FILE) {
+    return process.env.HEALTH_PAYLOAD_OVERRIDES_FILE;
+  }
+
+  const dockerPath = "/workspace/.runtime/health-payload-overrides.json";
+  if (fs.existsSync(dockerPath)) {
+    return dockerPath;
+  }
+
+  return path.resolve(process.cwd(), ".runtime/health-payload-overrides.json");
+}
+
+function loadExpectedPayloadOverrides() {
+  const file = resolvePayloadOverridesFile();
+
+  if (!fs.existsSync(file)) {
+    return {};
+  }
+
+  try {
+    const payload = JSON.parse(fs.readFileSync(file, "utf8"));
+    return payload.overrides || {};
+  } catch (e) {
+    throw new Error(`Invalid health payload overrides file: ${file}. ${e.message}`);
+  }
+}
+
+const HEALTH_PAYLOAD_OVERRIDES = loadExpectedPayloadOverrides();
+
+
+
+function getExpectedPayloadRaw(api, properties) {
+  const override = getPayloadOverride(api);
+
+  if (override !== undefined) {
+    console.log(
+      `[sync-mi-health-from-apim] using local expected payload override for ${api.name}:${api.version}`
+    );
+    return JSON.stringify(override);
+  }
+
+  const defaults = getContractDefaultConfig(api.name);
+
+  if (Object.prototype.hasOwnProperty.call(defaults, "expectedPayload")) {
+    return JSON.stringify(defaults.expectedPayload);
+  }
+
+  if (properties.contract_expected_payload_json) {
+    return properties.contract_expected_payload_json;
+  }
+
+  return getFallbackExpectedPayloadRaw(api);
+}
+
+
+
+
+function resolveContractDefaultsFile() {
+  if (process.env.CONTRACT_DEFAULTS_FILE) {
+    return process.env.CONTRACT_DEFAULTS_FILE;
+  }
+
+  const dockerPath = "/workspace/pipeline/config/contract-defaults.json";
+  if (fs.existsSync(dockerPath)) {
+    return dockerPath;
+  }
+
+  return path.resolve(process.cwd(), "pipeline/config/contract-defaults.json");
+}
+
+function loadContractDefaults() {
+  const file = resolveContractDefaultsFile();
+
+  if (!fs.existsSync(file)) {
+    return {};
+  }
+
+  try {
+    return JSON.parse(fs.readFileSync(file, "utf8"));
+  } catch (e) {
+    throw new Error(`Invalid contract defaults file: ${file}. ${e.message}`);
+  }
+}
+
+const CONTRACT_DEFAULTS = loadContractDefaults();
+
+function getContractDefaultConfig(apiName) {
+  return CONTRACT_DEFAULTS[apiName] || {};
+}
+
+function resolveContractRequestOverridesFile() {
+  if (process.env.CONTRACT_REQUEST_OVERRIDES_FILE) {
+    return process.env.CONTRACT_REQUEST_OVERRIDES_FILE;
+  }
+
+  const dockerPath = "/workspace/.runtime/contract-request-overrides.json";
+  if (fs.existsSync(dockerPath)) {
+    return dockerPath;
+  }
+
+  return path.resolve(process.cwd(), ".runtime/contract-request-overrides.json");
+}
+
+function loadContractRequestOverrides() {
+  const file = resolveContractRequestOverridesFile();
+
+  if (!fs.existsSync(file)) {
+    return {};
+  }
+
+  try {
+    const payload = JSON.parse(fs.readFileSync(file, "utf8"));
+    return payload.overrides || {};
+  } catch (e) {
+    throw new Error(`Invalid contract request overrides file: ${file}. ${e.message}`);
+  }
+}
+
+const CONTRACT_REQUEST_OVERRIDES = loadContractRequestOverrides();
+
+function parseJsonWithFallback(raw, fallback) {
+  if (!raw) {
+    return fallback;
+  }
+
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return fallback;
+  }
+}
+
+function normalizeContractRequest(value) {
+  const source = value && typeof value === "object" ? value : {};
+
+  return {
+    method: String(source.method || "GET").toUpperCase(),
+    path: String(source.path || "/"),
+    headers: source.headers && typeof source.headers === "object" && !Array.isArray(source.headers)
+      ? source.headers
+      : {},
+    query: source.query && typeof source.query === "object" && !Array.isArray(source.query)
+      ? source.query
+      : {},
+    body: Object.prototype.hasOwnProperty.call(source, "body") ? source.body : null
+  };
+}
+
+function appendQueryToUrl(url, query = {}) {
+  const entries = Object.entries(query || {}).filter(([, value]) => value !== undefined && value !== null);
+
+  if (entries.length === 0) {
+    return url;
+  }
+
+  const separator = url.includes("?") ? "&" : "?";
+  const queryString = entries
+    .flatMap(([key, value]) => {
+      if (Array.isArray(value)) {
+        return value.map((item) => `${encodeURIComponent(key)}=${encodeURIComponent(String(item))}`);
+      }
+
+      return [`${encodeURIComponent(key)}=${encodeURIComponent(String(value))}`];
+    })
+    .join("&");
+
+  return `${url}${separator}${queryString}`;
+}
+
+
+function resolveRuntimeJsonFile(filename, envVarName) {
+  if (process.env[envVarName]) {
+    return process.env[envVarName];
+  }
+
+  const dockerPath = path.join("/workspace", ".runtime", filename);
+  if (fs.existsSync(dockerPath)) {
+    return dockerPath;
+  }
+
+  return path.resolve(process.cwd(), ".runtime", filename);
+}
+
+function readRuntimeJsonObject(filename, envVarName) {
+  const file = resolveRuntimeJsonFile(filename, envVarName);
+
+  if (!fs.existsSync(file)) {
+    return {};
+  }
+
+  try {
+    return JSON.parse(fs.readFileSync(file, "utf8"));
+  } catch (e) {
+    throw new Error(`Invalid runtime override file ${file}: ${e.message}`);
+  }
+}
+
+const LOCAL_CONTRACT_REQUEST_OVERRIDES = readRuntimeJsonObject(
+  "contract-request-overrides.json",
+  "CONTRACT_REQUEST_OVERRIDES_FILE"
+);
+
+const LOCAL_CONTRACT_PAYLOAD_OVERRIDES = readRuntimeJsonObject(
+  "contract-payload-overrides.json",
+  "CONTRACT_PAYLOAD_OVERRIDES_FILE"
+);
+
+
+
+
+
+
+
+
+
+
+
+function resolveRuntimeOverrideFile(filename, envVarName) {
+  if (process.env[envVarName]) {
+    return process.env[envVarName];
+  }
+
+  const dockerPath = path.join("/workspace", ".runtime", filename);
+  if (fs.existsSync(dockerPath)) {
+    return dockerPath;
+  }
+
+  return path.resolve(process.cwd(), ".runtime", filename);
+}
+
+function readRuntimeOverrideMap(filename, envVarName) {
+  const file = resolveRuntimeOverrideFile(filename, envVarName);
+
+  if (!fs.existsSync(file)) {
+    return {};
+  }
+
+  try {
+    return JSON.parse(fs.readFileSync(file, "utf8"));
+  } catch (e) {
+    throw new Error(`Invalid runtime override file ${file}: ${e.message}`);
+  }
+}
+
+function contractOverrideKeys(api) {
+  return [
+    `${api.name}:${api.version}`,
+    api.name
+  ];
+}
+
+function getContractRequestOverride(api) {
+  const overrides = readRuntimeOverrideMap(
+    "contract-request-overrides.json",
+    "CONTRACT_REQUEST_OVERRIDES_FILE"
+  );
+
+  for (const key of contractOverrideKeys(api)) {
+    if (Object.prototype.hasOwnProperty.call(overrides, key)) {
+      return normalizeContractRequest(overrides[key]);
+    }
+  }
+
+  return undefined;
+}
+
+function getPayloadOverride(api) {
+  const overrides = readRuntimeOverrideMap(
+    "contract-payload-overrides.json",
+    "CONTRACT_PAYLOAD_OVERRIDES_FILE"
+  );
+
+  for (const key of contractOverrideKeys(api)) {
+    if (Object.prototype.hasOwnProperty.call(overrides, key)) {
+      return overrides[key];
+    }
+  }
+
+  return undefined;
+}
+
+function getContractRequest(api, properties) {
+  const override = getContractRequestOverride(api);
+
+  if (override !== undefined) {
+    console.log(
+      `[sync-mi-health-from-apim] using local contract request override for ${api.name}:${api.version}: ${override.path}`
+    );
+    return normalizeContractRequest(override);
+  }
+
+  const defaults = getContractDefaultConfig(api.name);
+
+  if (defaults.request) {
+    console.log(
+      `[sync-mi-health-from-apim] using contract-defaults.json request for ${api.name}:${api.version}: ${defaults.request.path}`
+    );
+    return normalizeContractRequest(defaults.request);
+  }
+
+  if (properties.contract_request_json) {
+    return normalizeContractRequest(parseJsonWithFallback(properties.contract_request_json, {}));
+  }
+
+  return normalizeContractRequest({
+    method: properties.contract_method || properties.health_method || "GET",
+    path: properties.contract_path || properties.health_path || "/",
+    headers: parseJsonWithFallback(properties.contract_request_headers_json, {}),
+    query: parseJsonWithFallback(properties.contract_request_query_json, {}),
+    body: parseJsonWithFallback(properties.contract_request_body_json, null)
+  });
+}
+
+
+
+function getContractRequest(api, properties) {
+  const override = getContractRequestOverride(api);
+
+  if (override !== undefined) {
+    console.log(
+      `[sync-mi-health-from-apim] using local contract request override for ${api.name}:${api.version}: ${override.path}`
+    );
+    return normalizeContractRequest(override);
+  }
+
+  const defaults = getContractDefaultConfig(api.name);
+
+  if (defaults.request) {
+    console.log(
+      `[sync-mi-health-from-apim] using contract-defaults.json request for ${api.name}:${api.version}: ${defaults.request.path}`
+    );
+    return normalizeContractRequest(defaults.request);
+  }
+
+  if (properties.contract_request_json) {
+    return normalizeContractRequest(parseJsonWithFallback(properties.contract_request_json, {}));
+  }
+
+  return normalizeContractRequest({
+    method: properties.contract_method || properties.health_method || "GET",
+    path: properties.contract_path || properties.health_path || "/",
+    headers: parseJsonWithFallback(properties.contract_request_headers_json, {}),
+    query: parseJsonWithFallback(properties.contract_request_query_json, {}),
+    body: parseJsonWithFallback(properties.contract_request_body_json, null)
+  });
+}
+
+
+
+function getContractRequest(api, properties) {
+  const override = getContractRequestOverride(api);
+
+  if (override !== undefined) {
+    console.log(
+      `[sync-mi-health-from-apim] using local contract request override for ${api.name}:${api.version}: ${override.path}`
+    );
+    return normalizeContractRequest(override);
+  }
+
+  const defaults = getContractDefaultConfig(api.name);
+
+  if (defaults.request) {
+    console.log(
+      `[sync-mi-health-from-apim] using contract-defaults.json request for ${api.name}:${api.version}: ${defaults.request.path}`
+    );
+    return normalizeContractRequest(defaults.request);
+  }
+
+  if (properties.contract_request_json) {
+    return normalizeContractRequest(parseJsonWithFallback(properties.contract_request_json, {}));
+  }
+
+  return normalizeContractRequest({
+    method: properties.contract_method || properties.health_method || "GET",
+    path: properties.contract_path || properties.health_path || "/",
+    headers: parseJsonWithFallback(properties.contract_request_headers_json, {}),
+    query: parseJsonWithFallback(properties.contract_request_query_json, {}),
+    body: parseJsonWithFallback(properties.contract_request_body_json, null)
+  });
+}
+
+function getContractRequest(api, properties) {
+  const override = getContractRequestOverride(api);
+
+  if (override !== undefined) {
+    console.log(
+      `[sync-mi-health-from-apim] using local contract request override for ${api.name}:${api.version}: ${override.path}`
+    );
+    return normalizeContractRequest(override);
+  }
+
+  const defaults = getContractDefaultConfig(api.name);
+
+  if (defaults.request) {
+    console.log(
+      `[sync-mi-health-from-apim] using contract-defaults.json request for ${api.name}:${api.version}: ${defaults.request.path}`
+    );
+    return normalizeContractRequest(defaults.request);
+  }
+
+  if (properties.contract_request_json) {
+    return normalizeContractRequest(parseJsonWithFallback(properties.contract_request_json, {}));
+  }
+
+  return normalizeContractRequest({
+    method: properties.contract_method || properties.health_method || "GET",
+    path: properties.contract_path || properties.health_path || "/",
+    headers: parseJsonWithFallback(properties.contract_request_headers_json, {}),
+    query: parseJsonWithFallback(properties.contract_request_query_json, {}),
+    body: parseJsonWithFallback(properties.contract_request_body_json, null)
+  });
+}
+
+function renderRequestHeaderProperties(headers = {}) {
+  return Object.entries(headers || {})
+    .map(([name, value]) => `      <property name="${xmlEscape(name)}" value="${xmlEscape(value)}" scope="transport"/>`)
+    .join("\n");
+}
+
+function renderRequestPayloadFactory(body) {
+  if (body === undefined || body === null) {
+    return "";
+  }
+
+  return `      <payloadFactory media-type="json">
+        <format>${xmlEscape(JSON.stringify(body))}</format>
+        <args/>
+      </payloadFactory>`;
+}
+
+
 function xmlEscape(value) {
   return String(value ?? "")
     .replace(/&/g, "&amp;")
@@ -249,7 +682,7 @@ function buildRegistryRecord(api) {
       );
     }
 
-    const expectedPayloadRaw = p.health_expected_payload_json || "{}";
+    const expectedPayloadRaw = getExpectedPayloadRaw(api, p);
     let expectedPayload = {};
 
     try {
@@ -258,18 +691,35 @@ function buildRegistryRecord(api) {
       throw new Error(`Invalid health_expected_payload_json for API ${api.name}:${api.version}: ${expectedPayloadRaw}`);
     }
 
-    const requiredFields = String(p.health_required_fields || "")
+    const contractDefaultsForValidation = getContractDefaultConfig(api.name);
+    const contractRequiredFieldsFromDefaults = Array.isArray(contractDefaultsForValidation.requiredFields)
+      ? contractDefaultsForValidation.requiredFields.join(",")
+      : "";
+
+    const requiredFields = String(
+      p.contract_required_fields ||
+      contractRequiredFieldsFromDefaults ||
+      "traceId,service,timestamp,data"
+    )
       .split(",")
       .map((v) => v.trim())
       .filter(Boolean);
 
-    const healthUrl = `${String(backendUrl).replace(/\/+$/, "")}${healthPath}`;
+    const contractRequest = getContractRequest(api, p);
+    const contractPath = contractRequest.path || healthPath;
+    const healthUrl = appendQueryToUrl(
+      `${String(backendUrl).replace(/\/+$/, "")}${contractPath}`,
+      contractRequest.query
+    );
 
     healthStrategy = {
       type: "HTTP_HEALTH_CONTRACT",
-      method: p.health_method || "GET",
+      method: contractRequest.method || p.contract_method || p.health_method || "GET",
       url: healthUrl,
-      expectedHttpStatus: Number(p.health_expected_http_status || 200),
+      expectedHttpStatus: Number(contractDefaultsForValidation.expectedHttpStatus || p.contract_expected_http_status || p.health_expected_http_status || 200),
+      request: contractRequest,
+      requestHeaders: contractRequest.headers || {},
+      requestBody: Object.prototype.hasOwnProperty.call(contractRequest, "body") ? contractRequest.body : null,
       expectedPayload,
       requiredFields,
       timeoutMs: Number(p.health_timeout_ms || 3000)
@@ -307,6 +757,15 @@ function buildRegistryRecord(api) {
 function renderCheckSequence(record, sequenceName) {
   const expectedPayloadJson = JSON.stringify(record.healthStrategy.expectedPayload);
   const requiredFieldsCsv = record.healthStrategy.requiredFields.join(",");
+  const requestHeadersXml = renderRequestHeaderProperties(record.healthStrategy.requestHeaders || {});
+  const requestBodyXml = renderRequestPayloadFactory(record.healthStrategy.requestBody);
+  const requestJson = JSON.stringify(record.healthStrategy.request || {});
+  const requestHeadersJson = JSON.stringify(record.healthStrategy.requestHeaders || {});
+  const requestBodyJson = JSON.stringify(
+    Object.prototype.hasOwnProperty.call(record.healthStrategy, "requestBody")
+      ? record.healthStrategy.requestBody
+      : null
+  );
 
   return `<?xml version="1.0" encoding="UTF-8"?>
 <sequence xmlns="http://ws.apache.org/ns/synapse" name="${xmlEscape(sequenceName)}">
@@ -334,6 +793,8 @@ function renderCheckSequence(record, sequenceName) {
 
     <property name="REST_URL_POSTFIX" scope="axis2" action="remove"/>
     <property name="non.error.http.status.codes" value="400,401,403,404,500,502,503,504" scope="axis2" type="STRING"/>
+${requestHeadersXml}
+${requestBodyXml}
 
     <call blocking="true">
         <endpoint>
@@ -385,26 +846,230 @@ function renderCheckSequence(record, sequenceName) {
 
         var reasons = [];
 
-        var livenessOk = httpStatus === expectedHttpStatus;
-        var expectedPayloadOk = true;
-        var requiredFieldsOk = true;
+        var contractRequestForCorrelation = ${requestJson};
 
-        for (var key in expectedPayload) {
-            if (expectedPayload.hasOwnProperty(key)) {
-                var actualValue = payload && payload[key] !== undefined ? String(payload[key]) : "";
-                var expectedValue = String(expectedPayload[key]);
+        function collectCustomerIdsForContractCorrelation(value, ids) {
+            if (value === null || value === undefined) {
+                return;
+            }
 
-                if (actualValue !== expectedValue) {
-                    expectedPayloadOk = false;
-                    reasons.push("Expected payload field '" + key + "' to be '" + expectedValue + "' but got '" + actualValue + "'");
+            if (Array.isArray(value)) {
+                for (var ci = 0; ci < value.length; ci++) {
+                    collectCustomerIdsForContractCorrelation(value[ci], ids);
+                }
+                return;
+            }
+
+            if (typeof value === "object") {
+                if (
+                    Object.prototype.hasOwnProperty.call(value, "customerId") &&
+                    value.customerId !== null &&
+                    value.customerId !== undefined &&
+                    String(value.customerId).length > 0
+                ) {
+                    ids.push(String(value.customerId));
+                }
+
+                var keysForCorrelation = Object.keys(value);
+                for (var ck = 0; ck < keysForCorrelation.length; ck++) {
+                    collectCustomerIdsForContractCorrelation(value[keysForCorrelation[ck]], ids);
                 }
             }
         }
 
-        for (var i = 0; i < requiredFields.length; i++) {
-            var field = String(requiredFields[i]).trim();
+        function uniqueValues(values) {
+            var seen = {};
+            var result = [];
 
-            if (field.length > 0 && (!payload || payload[field] === undefined)) {
+            for (var uv = 0; uv < values.length; uv++) {
+                var item = String(values[uv]);
+
+                if (!seen[item]) {
+                    seen[item] = true;
+                    result.push(item);
+                }
+            }
+
+            return result;
+        }
+
+        var requestedCustomerId = null;
+        var requestPathForCorrelation = String(
+            contractRequestForCorrelation && contractRequestForCorrelation.path
+                ? contractRequestForCorrelation.path
+                : ""
+        );
+
+        var customerMatch = requestPathForCorrelation.match(/(CUST-[A-Z]{2}-[0-9]+)/);
+        if (customerMatch && customerMatch[1]) {
+            requestedCustomerId = customerMatch[1];
+        }
+
+        if (requestedCustomerId !== null) {
+            var expectedCustomerIds = [];
+            var actualCustomerIds = [];
+
+            collectCustomerIdsForContractCorrelation(expectedPayload, expectedCustomerIds);
+            collectCustomerIdsForContractCorrelation(payload, actualCustomerIds);
+
+            expectedCustomerIds = uniqueValues(expectedCustomerIds);
+            actualCustomerIds = uniqueValues(actualCustomerIds);
+
+            for (var eci = 0; eci < expectedCustomerIds.length; eci++) {
+                if (expectedCustomerIds[eci] !== requestedCustomerId) {
+                    expectedPayloadOk = false;
+                    reasons.push(
+                        "Expected payload customerId '" +
+                        expectedCustomerIds[eci] +
+                        "' does not match request customerId '" +
+                        requestedCustomerId +
+                        "'"
+                    );
+                }
+            }
+
+            for (var aci = 0; aci < actualCustomerIds.length; aci++) {
+                if (actualCustomerIds[aci] !== requestedCustomerId) {
+                    expectedPayloadOk = false;
+                    reasons.push(
+                        "Actual payload customerId '" +
+                        actualCustomerIds[aci] +
+                        "' does not match request customerId '" +
+                        requestedCustomerId +
+                        "'"
+                    );
+                }
+            }
+        }
+
+
+        var livenessOk = httpStatus === expectedHttpStatus;
+        var expectedPayloadOk = true;
+        var requiredFieldsOk = true;
+
+        function isPlainObject(value) {
+            return value !== null && typeof value === "object" && !Array.isArray(value);
+        }
+
+        function formatValue(value) {
+            if (value === undefined) {
+                return "";
+            }
+
+            if (value === null) {
+                return "null";
+            }
+
+            if (typeof value === "object") {
+                try {
+                    return JSON.stringify(value);
+                } catch (e) {
+                    return String(value);
+                }
+            }
+
+            return String(value);
+        }
+
+        function compareLeafFields(path, actual, expected, mismatches) {
+            if (Array.isArray(expected)) {
+                if (!Array.isArray(actual)) {
+                    mismatches.push(
+                        "Expected payload field '" + path + "' to be an array but got '" +
+                        formatValue(actual) + "'"
+                    );
+                    return;
+                }
+
+                for (var i = 0; i < expected.length; i++) {
+                    var expectedItem = expected[i];
+
+                    if (isPlainObject(expectedItem)) {
+                        var matched = false;
+                        var bestMismatch = null;
+
+                        for (var j = 0; j < actual.length; j++) {
+                            var trial = [];
+                            compareLeafFields(path + "[" + i + "]", actual[j], expectedItem, trial);
+
+                            if (trial.length === 0) {
+                                matched = true;
+                                break;
+                            }
+
+                            if (bestMismatch === null || trial.length < bestMismatch.length) {
+                                bestMismatch = trial;
+                            }
+                        }
+
+                        if (!matched) {
+                            mismatches.push(
+                                "No item in actual array matched expected payload object at '" +
+                                path + "[" + i + "]'"
+                            );
+
+                            if (bestMismatch && bestMismatch.length > 0) {
+                                mismatches.push(bestMismatch[0]);
+                            }
+                        }
+                    } else {
+                        compareLeafFields(path + "[" + i + "]", actual[i], expectedItem, mismatches);
+                    }
+                }
+
+                return;
+            }
+
+            if (isPlainObject(expected)) {
+                if (!isPlainObject(actual)) {
+                    mismatches.push(
+                        "Expected payload field '" + path + "' to be an object but got '" +
+                        formatValue(actual) + "'"
+                    );
+                    return;
+                }
+
+                var keys = Object.keys(expected);
+
+                for (var k = 0; k < keys.length; k++) {
+                    var nestedKey = keys[k];
+                    var nextPath = path ? path + "." + nestedKey : nestedKey;
+                    compareLeafFields(nextPath, actual[nestedKey], expected[nestedKey], mismatches);
+                }
+
+                return;
+            }
+
+            if (String(actual) !== String(expected)) {
+                mismatches.push(
+                    "Expected payload field '" + path + "' to be '" +
+                    formatValue(expected) + "' but got '" + formatValue(actual) + "'"
+                );
+            }
+        }
+
+        var payloadMismatches = [];
+        compareLeafFields("", payload, expectedPayload, payloadMismatches);
+
+        if (payloadMismatches.length > 0) {
+            expectedPayloadOk = false;
+            for (var pm = 0; pm < payloadMismatches.length; pm++) {
+                reasons.push(payloadMismatches[pm]);
+            }
+        }
+
+        for (var requiredIndex = 0; requiredIndex < requiredFields.length; requiredIndex++) {
+            var field = String(requiredFields[requiredIndex]).trim();
+
+            if (
+                field.length > 0 &&
+                (
+                    !payload ||
+                    payload[field] === undefined ||
+                    payload[field] === null ||
+                    payload[field] === ""
+                )
+            ) {
                 requiredFieldsOk = false;
                 reasons.push("Required payload field is missing: " + field);
             }
@@ -451,7 +1116,10 @@ function renderCheckSequence(record, sequenceName) {
             contract: {
                 status: contractStatus,
                 reasons: reasons,
-                expectedPayload: expectedPayload,
+                request: ${requestJson},
+      requestHeaders: ${requestHeadersJson},
+      requestBody: ${requestBodyJson},
+      expectedPayload,
                 requiredFields: requiredFields,
                 actualPayload: payload
             },
@@ -675,20 +1343,27 @@ function renderHealthRegistryApi(records) {
     </resource>
 
     <resource methods="POST" uri-template="/v1/probes/run">
-        <inSequence>
-            <payloadFactory media-type="json">
-                <format>{
-                    "message": "Manual full probe execution is disabled for tier-timing validation.",
-                    "reason": "Health probes are executed only by scheduled MI tier tasks.",
-                    "expectedFlow": "Use GET /catalogue-status/v1/apis to read the latest cached status."
-                }</format>
-            </payloadFactory>
-            <property name="HTTP_SC" value="409" scope="axis2" type="STRING"/>
-            <property name="messageType" value="application/json" scope="axis2" type="STRING"/>
-            <property name="ContentType" value="application/json" scope="axis2" type="STRING"/>
-            <respond/>
-        </inSequence>
-    </resource>
+    <inSequence>
+      <log level="custom">
+        <property name="health-registry" value="Manual full probe execution requested"/>
+      </log>
+      <sequence key="run_all_health_checks"/>
+      <payloadFactory media-type="json">
+        <format>{"status":"COMPLETED","message":"Manual full probe execution completed","source":"health-registry-api"}</format>
+        <args/>
+      </payloadFactory>
+      <property name="HTTP_SC" value="200" scope="axis2"/>
+      <respond/>
+    </inSequence>
+    <faultSequence>
+      <payloadFactory media-type="json">
+        <format>{"status":"ERROR","message":"Manual full probe execution failed"}</format>
+        <args/>
+      </payloadFactory>
+      <property name="HTTP_SC" value="500" scope="axis2"/>
+      <respond/>
+    </faultSequence>
+  </resource>
 
     <resource methods="POST" uri-template="/v1/apis">
         <inSequence>

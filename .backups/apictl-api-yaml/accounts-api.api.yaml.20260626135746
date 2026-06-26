@@ -39,7 +39,7 @@ data:
     display: true
   - name: health_backend_url
     value: "http://accounts-api:5101"
-    display: true
+    display: false
   - name: health_path
     value: "/accounts/v1/health"
     display: true
@@ -53,23 +53,24 @@ data:
     value: '{"status":"UP","service":"accounts-api"}'
     display: true
   - name: health_required_fields
-    value: "status,service"
+    value: "status,service,timestamp"
     display: true
   - name: health_sla_target
-    value: "300"
+    value: "99.95%"
     display: true
   - name: health_criticality
     value: "Tier 0"
     display: true
   - name: health_runtime
-    value: "Docker Compose"
+    value: "Kubernetes"
     display: true
   - name: health_domain
-    value: "Accounts"
+    value: "Retail Banking"
     display: true
   - name: health_owner_team
-    value: "Core Banking Platform"
+    value: "Accounts Platform Team"
     display: true
   - name: health_owner_email
-    value: "core-banking-platform@example.com"
+    value: "accounts-platform@bank.example"
     display: true
+ - name: contract_enabled value: "true" display: true - name: contract_method value: "GET" display: true - name: contract_path value: "/accounts/v1/accounts/CUST-BR-001" display: true - name: contract_expected_http_status value: "200" display: true - name: contract_expected_payload_json value: '{"service":"accounts-api","data":[{"accountId":"ACC-1001","customerId":"CUST-BR-001","type":"CHECKING","status":"ACTIVE"}]}' display: true - name: contract_required_fields value: "traceId,service,timestamp,data" display: true - name: contract_request_json value: '{"method":"GET","path":"/accounts/v1/accounts/CUST-BR-001","headers":{},"query":{},"body":null}' display: true

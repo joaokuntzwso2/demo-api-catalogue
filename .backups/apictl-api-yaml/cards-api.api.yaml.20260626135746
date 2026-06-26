@@ -39,7 +39,7 @@ data:
     display: true
   - name: health_backend_url
     value: "http://cards-api:5104"
-    display: true
+    display: false
   - name: health_path
     value: "/cards/v1/health"
     display: true
@@ -53,23 +53,23 @@ data:
     value: '{"status":"UP","service":"cards-api"}'
     display: true
   - name: health_required_fields
-    value: "status,service"
+    value: "status,service,timestamp"
     display: true
   - name: health_sla_target
-    value: "300"
+    value: "99.90%"
     display: true
   - name: health_criticality
     value: "Tier 1"
     display: true
   - name: health_runtime
-    value: "Docker Compose"
+    value: "Kubernetes"
     display: true
   - name: health_domain
     value: "Cards"
     display: true
   - name: health_owner_team
-    value: "Cards Platform"
+    value: "Cards Platform Team"
     display: true
   - name: health_owner_email
-    value: "cards-platform@example.com"
-    display: true
+    value: "cards-platform@bank.example"
+    display: true - name: contract_enabled value: "true" display: true - name: contract_method value: "GET" display: true - name: contract_path value: "/cards/v1/cards/CUST-BR-001" display: true - name: contract_expected_http_status value: "200" display: true - name: contract_expected_payload_json value: '{"service":"cards-api","data":[{"cardId":"CARD-1001","customerId":"CUST-BR-001","brand":"VISA","status":"ACTIVE"}]}' display: true - name: contract_required_fields value: "traceId,service,timestamp,data" display: true - name: contract_request_json value: '{"method":"GET","path":"/cards/v1/cards/CUST-BR-001","headers":{},"query":{},"body":null}' display: true
