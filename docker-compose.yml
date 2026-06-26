@@ -1,7 +1,8 @@
 services:
   accounts-api:
     build: ./apis/accounts-api
-    ports: ["5101:5101"]
+    ports:
+      - "5101:5101"
     environment:
       PORT: 5101
       API_CONTEXT: /accounts/v1
@@ -9,7 +10,8 @@ services:
 
   payments-api:
     build: ./apis/payments-api
-    ports: ["5102:5102"]
+    ports:
+      - "5102:5102"
     environment:
       PORT: 5102
       API_CONTEXT: /payments/v1
@@ -17,7 +19,8 @@ services:
 
   customers-api:
     build: ./apis/customers-api
-    ports: ["5103:5103"]
+    ports:
+      - "5103:5103"
     environment:
       PORT: 5103
       API_CONTEXT: /customers/v1
@@ -25,7 +28,8 @@ services:
 
   cards-api:
     build: ./apis/cards-api
-    ports: ["5104:5104"]
+    ports:
+      - "5104:5104"
     environment:
       PORT: 5104
       API_CONTEXT: /cards/v1
@@ -33,7 +37,8 @@ services:
 
   loans-api:
     build: ./apis/loans-api
-    ports: ["5105:5105"]
+    ports:
+      - "5105:5105"
     environment:
       PORT: 5105
       API_CONTEXT: /loans/v1
@@ -41,8 +46,10 @@ services:
 
   health-status-cache:
     build: ./health-status-cache
-    profiles: ["platform"]
-    ports: ["6300:6300"]
+    profiles:
+      - platform
+    ports:
+      - "6300:6300"
     environment:
       PORT: 6300
       DATA_DIR: /app/data
@@ -51,8 +58,10 @@ services:
 
   ui-platform:
     build: ./ui
-    profiles: ["platform"]
-    ports: ["5174:5173"]
+    profiles:
+      - platform
+    ports:
+      - "5174:5173"
     depends_on:
       - wso2-integrator
     environment:
@@ -64,7 +73,8 @@ services:
     platform: linux/amd64
     image: wso2/wso2am:4.7.0
     container_name: wso2-apim-47
-    profiles: ["platform"]
+    profiles:
+      - platform
     ports:
       - "9443:9443"
       - "9763:9763"
@@ -73,29 +83,48 @@ services:
     environment:
       JAVA_OPTS: "-Xms1024m -Xmx3072m"
     healthcheck:
-      test: ["CMD-SHELL", "curl -ksf https://localhost:9443/carbon >/dev/null || exit 1"]
+      test:
+        [
+          "CMD-SHELL",
+          "curl -ksf https://localhost:9443/carbon >/dev/null && code=$$(curl -ks -o /dev/null -w '%{http_code}' https://localhost:9443/api/am/service-catalog/v1/services); echo $$code | grep -Eq '^(200|401|403)$$'"
+        ]
       interval: 30s
       timeout: 10s
-      retries: 30
-      start_period: 180s
+      retries: 40
+      start_period: 240s
 
   wso2-integrator:
     platform: linux/amd64
     image: wso2/wso2mi:4.6.0
     container_name: wso2-integrator-mi
-    profiles: ["platform"]
+    profiles:
+      - platform
     ports:
       - "8290:8290"
       - "8253:8253"
       - "9164:9164"
     depends_on:
-      - accounts-api
-      - payments-api
-      - customers-api
-      - cards-api
-      - loans-api
-      - health-status-cache
+      wso2-apim:
+        condition: service_healthy
+      health-status-cache:
+        condition: service_started
+      accounts-api:
+        condition: service_started
+      payments-api:
+        condition: service_started
+      customers-api:
+        condition: service_started
+      cards-api:
+        condition: service_started
+      loans-api:
+        condition: service_started
+    environment:
+      MI_HOST: wso2-integrator
+      MI_PORT: 8290
     volumes:
+      - ./wso2-integrator/catalogue-health-mi/src/main/wso2mi/deployment/deployment.toml:/home/wso2carbon/wso2mi-4.6.0/conf/deployment.toml:ro
+      - ./wso2-integrator/catalogue-health-mi/src/main/wso2mi/resources/metadata:/home/wso2carbon/wso2mi-4.6.0/resources/metadata:ro
+      - ./wso2-integrator/catalogue-health-mi/src/main/wso2mi/resources/api-definitions:/home/wso2carbon/wso2mi-4.6.0/resources/api-definitions:ro
       - ./wso2-integrator/catalogue-health-mi/src/main/wso2mi/artifacts/apis:/home/wso2carbon/wso2mi-4.6.0/repository/deployment/server/synapse-configs/default/api
       - ./wso2-integrator/catalogue-health-mi/src/main/wso2mi/artifacts/sequences:/home/wso2carbon/wso2mi-4.6.0/repository/deployment/server/synapse-configs/default/sequences
       - ./wso2-integrator/catalogue-health-mi/src/main/wso2mi/artifacts/tasks:/home/wso2carbon/wso2mi-4.6.0/repository/deployment/server/synapse-configs/default/tasks
@@ -105,7 +134,8 @@ services:
       context: .
       dockerfile: tools/apictl/Dockerfile
     container_name: wso2-apictl-runner
-    profiles: ["platform"]
+    profiles:
+      - platform
     depends_on:
       wso2-apim:
         condition: service_healthy
@@ -122,7 +152,9 @@ services:
       MI_ARTIFACTS_ROOT: /workspace/wso2-integrator/catalogue-health-mi/src/main/wso2mi/artifacts
       APIM_ALLOW_INSECURE_TLS: "true"
       STATUS_CACHE_BASE_URL: http://health-status-cache:6300
-    entrypoint: ["/bin/bash", "-lc"]
+    entrypoint:
+      - /bin/bash
+      - -lc
     command: "apictl version && tail -f /dev/null"
 
 volumes:

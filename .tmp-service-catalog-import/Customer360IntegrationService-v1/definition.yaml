@@ -1,0 +1,92 @@
+openapi: 3.0.1
+info:
+  title: Customer 360 Integration Service
+  version: v1
+  description: Composite Customer 360 service implemented in WSO2 Integrator and published to WSO2 API Manager Service Catalog.
+servers:
+  - url: /customer-360/v1
+paths:
+  /customers/{customerId}:
+    get:
+      summary: Get aggregated customer 360 profile
+      description: Returns a consolidated customer view by orchestrating multiple mocked banking APIs.
+      operationId: getCustomer360
+      parameters:
+        - name: customerId
+          in: path
+          required: true
+          description: Customer identifier.
+          schema:
+            type: string
+            example: CUST-BR-001
+      responses:
+        "200":
+          description: Aggregated customer profile.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Customer360Response"
+        "404":
+          description: Customer not found.
+        "500":
+          description: Integration error.
+  /health:
+    get:
+      summary: Customer 360 service health
+      operationId: getCustomer360Health
+      responses:
+        "200":
+          description: Service health response.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+components:
+  schemas:
+    Customer360Response:
+      type: object
+      properties:
+        customerId:
+          type: string
+          example: CUST-BR-001
+        status:
+          type: string
+          example: ACTIVE
+        source:
+          type: string
+          example: wso2-integrator
+        customer:
+          type: object
+          additionalProperties: true
+        accounts:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        cards:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        loans:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        payments:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+    HealthResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          example: UP
+        service:
+          type: string
+          example: customer-360-api
+        timestamp:
+          type: string
+          format: date-time

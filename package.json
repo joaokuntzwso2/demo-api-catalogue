@@ -6,41 +6,43 @@
   "scripts": {
     "demo:up": "docker-compose up --build",
     "demo:down": "docker-compose down -v",
-
     "validate:contracts": "node pipeline/scripts/validate-openapi.js",
     "simulate:dev-team": "bash pipeline/scripts/simulate-dev-team-journey.sh",
-
     "platform:up": "docker-compose --profile platform up -d --build",
     "platform:down": "docker-compose --profile platform down -v --remove-orphans",
-
     "platform:import:all": "docker-compose --profile platform run --rm -e APIM_ALLOW_INSECURE_TLS=true apictl \"bash pipeline/scripts/deploy-all-to-apim.sh\"",
     "platform:import:initial3": "docker-compose --profile platform run --rm -e APIM_ALLOW_INSECURE_TLS=true apictl \"bash pipeline/scripts/deploy-initial-3-to-apim.sh\"",
     "platform:import:cards": "docker-compose --profile platform run --rm -e APIM_ALLOW_INSECURE_TLS=true apictl \"bash pipeline/scripts/deploy-cards-later-to-apim.sh\"",
     "platform:import:loans": "docker-compose --profile platform run --rm -e APIM_ALLOW_INSECURE_TLS=true apictl \"bash pipeline/scripts/deploy-loans-later-to-apim.sh\"",
-
     "platform:reconcile-once": "docker-compose --profile platform run --rm -e APIM_ALLOW_INSECURE_TLS=true apictl \"node pipeline/scripts/sync-mi-health-from-apim.js\" && docker-compose --profile platform up -d --force-recreate wso2-integrator ui-platform",
-
-    "platform:onboard": "npm run platform:import:all && npm run platform:reconcile-once",
-    "platform:onboard:initial3": "npm run platform:import:initial3 && npm run platform:reconcile-once",
-    "platform:onboard:cards": "npm run platform:import:cards && npm run platform:reconcile-once",
-    "platform:onboard:loans": "npm run platform:import:loans && npm run platform:reconcile-once",
-
+    "platform:onboard": "npm run platform:import:all && npm run platform:post-onboard:all && npm run platform:reconcile-once",
+    "platform:onboard:initial3": "npm run platform:import:initial3 && npm run platform:post-onboard:initial3 && npm run platform:reconcile-once",
+    "platform:onboard:cards": "npm run platform:import:cards && npm run platform:post-onboard:cards && npm run platform:reconcile-once",
+    "platform:onboard:loans": "npm run platform:import:loans && npm run platform:post-onboard:loans && npm run platform:reconcile-once",
     "platform:sync-health": "npm run platform:reconcile-once",
-
     "platform:watch-sync": "echo 'Do not use platform:watch-sync during tier timing tests. Use platform:onboard:* or platform:reconcile-once instead.'",
-
     "platform:apictl": "docker-compose --profile platform run --rm apictl \"apictl version\"",
     "platform:logs:apim": "docker-compose --profile platform logs -f wso2-apim",
     "platform:logs:integrator": "docker-compose --profile platform logs -f wso2-integrator",
     "platform:clean-generated": "bash pipeline/scripts/clean-generated-mi-artifacts.sh",
-
     "platform:governance:check": "node pipeline/scripts/enhanced-governance-check.js apictl/apis/*",
     "platform:governance:dry-run:accounts": "docker-compose --profile platform run --rm -e APIM_ALLOW_INSECURE_TLS=true apictl \"bash pipeline/scripts/apictl-governance-dry-run.sh apictl/apis/accounts-api\"",
     "platform:readiness": "node pipeline/scripts/apim-platform-readiness.js",
     "platform:subscribe:accounts": "node pipeline/scripts/devportal-subscribe-and-invoke.js accounts-api /accounts/v1/health",
     "platform:history": "curl http://localhost:6300/cache/history | jq",
     "platform:sla:accounts": "curl 'http://localhost:6300/cache/sla?api=accounts-api&window=30d' | jq",
-    "platform:sla:breaches": "curl 'http://localhost:6300/cache/sla/breaches?window=30d' | jq"
+    "platform:sla:breaches": "curl 'http://localhost:6300/cache/sla/breaches?window=30d' | jq",
+    "platform:service-catalog:logs": "docker compose --profile platform logs -f wso2-integrator | grep -iE 'service catalog|Successfully updated|Customer360|ERROR|WARN'",
+    "platform:service-catalog:restart-mi": "docker compose --profile platform restart wso2-integrator && docker compose --profile platform logs -f wso2-integrator",
+    "platform:customer360:test": "curl -s http://localhost:8290/customer-360/v1/customers/CUST-BR-001 | jq",
+    "platform:service-catalog:bootstrap": "node pipeline/scripts/bootstrap-service-catalog.js",
+    "platform:service-catalog:list": "node pipeline/scripts/list-service-catalog.js",
+    "platform:post-onboard:initial3": "node pipeline/scripts/apim-post-onboard.js accounts-api payments-api customers-api",
+    "platform:post-onboard:cards": "node pipeline/scripts/apim-post-onboard.js cards-api",
+    "platform:post-onboard:loans": "node pipeline/scripts/apim-post-onboard.js loans-api",
+    "platform:post-onboard:all": "node pipeline/scripts/apim-post-onboard.js --all-demo",
+    "platform:app:subscriptions": "bash -lc 'CLIENT_RESPONSE=$(curl -ks -u admin:admin -H \"Content-Type: application/json\" -d \"{\"callbackUrl\":\"www.google.com\",\"clientName\":\"api-catalogue-app-check\",\"owner\":\"admin\",\"grantType\":\"password refresh_token client_credentials\",\"saasApp\":true}\" https://localhost:9443/client-registration/v0.17/register); CLIENT_ID=$(echo \"$CLIENT_RESPONSE\" | jq -r .clientId); CLIENT_SECRET=$(echo \"$CLIENT_RESPONSE\" | jq -r .clientSecret); TOKEN_RESPONSE=$(curl -ks -u \"$CLIENT_ID:$CLIENT_SECRET\" -H \"Content-Type: application/x-www-form-urlencoded\" -d \"grant_type=password&username=admin&password=admin&scope=apim:api_view apim:subscribe apim:app_manage apim:sub_manage\" https://localhost:9443/oauth2/token); ACCESS_TOKEN=$(echo \"$TOKEN_RESPONSE\" | jq -r .access_token); APP_ID=$(curl -ks -H \"Authorization: Bearer $ACCESS_TOKEN\" \"https://localhost:9443/api/am/devportal/v3/applications?limit=100\" | jq -r \".list[] | select(.name==\\\"API Catalogue Application\\\") | (.applicationId // .id)\"); echo \"Application ID: $APP_ID\"; curl -ks -H \"Authorization: Bearer $ACCESS_TOKEN\" \"https://localhost:9443/api/am/devportal/v3/subscriptions?applicationId=$APP_ID&limit=100\" | jq \".list[]? | {apiName: .apiInfo.name, apiVersion: .apiInfo.version, throttlingPolicy, status}\"'",
+    "platform:restart:fresh": "bash scripts/full-restart-with-service-catalog.sh"
   },
   "workspaces": [
     "apis/*",

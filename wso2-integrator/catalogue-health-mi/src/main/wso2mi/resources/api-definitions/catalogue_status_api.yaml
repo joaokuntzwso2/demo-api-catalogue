@@ -1,19 +1,34 @@
 openapi: 3.0.1
 info:
-  title: CatalogueStatusAPI
-  description: API Definition of CatalogueStatusAPI
-  version: 1.0.0
+  title: Catalogue Status API
+  version: v1
+  description: Internal API exposed by WSO2 Integrator to retrieve cached catalogue health status.
 servers:
-- url: http://localhost:8290/catalogue-status
-- url: https://localhost:8253/catalogue-status
+  - url: /
 paths:
-  /v1/apis:
+  /apis:
     get:
+      summary: List catalogue API statuses
+      operationId: listCatalogueStatuses
       responses:
-        default:
-          description: Default response
-  /v1/summary:
+        "200":
+          description: List of cached API health statuses.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  additionalProperties: true
+  /summary:
     get:
+      summary: Get catalogue health summary
+      operationId: getCatalogueStatusSummary
       responses:
-        default:
-          description: Default response
+        "200":
+          description: Catalogue health summary.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true

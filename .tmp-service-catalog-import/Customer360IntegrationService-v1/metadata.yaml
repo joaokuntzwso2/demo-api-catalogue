@@ -1,0 +1,10 @@
+---
+key: "Customer360IntegrationService-v1"
+name: "Customer360IntegrationService"
+displayName: "Customer 360 Integration Service"
+description: "Composite Customer 360 integration service implemented in WSO2 Integrator. It aggregates customer, account, card, payment and loan information from mocked banking backends and can be exposed as a managed API through WSO2 API Manager."
+version: "v1"
+serviceUrl: "http://wso2-integrator:8290/customer-360/v1"
+definitionType: "OAS3"
+securityType: "BASIC"
+mutualSSLEnabled: false
