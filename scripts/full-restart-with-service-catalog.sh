@@ -82,6 +82,10 @@ echo "12. Verifying Service Catalog entries..."
 npm run platform:service-catalog:list
 
 echo
+echo "13. Starting local UI onboarding control server..."
+npm run platform:control:start
+
+echo
 echo "============================================================"
 echo " Platform restarted from scratch and Service Catalog is ready"
 echo "============================================================"
@@ -90,6 +94,7 @@ echo "Open:"
 echo "  Publisher:  https://localhost:9443/publisher"
 echo "  DevPortal:  https://localhost:9443/devportal"
 echo "  UI:         http://localhost:5174"
+echo "  Control API:http://localhost:6400"
 echo
 echo "Credentials:"
 echo "  admin / admin"

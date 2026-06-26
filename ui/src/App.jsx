@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { Activity, AlertTriangle, CheckCircle2, Clock, DatabaseZap, RefreshCcw, Search } from 'lucide-react';
 import './styles.css';
+import OnboardingPanel from './components/OnboardingPanel.jsx';
 
 const API_BASE = import.meta.env.VITE_STATUS_API_BASE_URL || '';
 const STATUS_PREFIX = import.meta.env.VITE_STATUS_API_PREFIX || '/catalogue-status/v1';
@@ -123,6 +124,7 @@ function App() {
 
   return (
     <main>
+      <OnboardingPanel />
       <section className="hero">
         <div>
           <p className="eyebrow">WSO2 API Platform + WSO2 Integration Platform</p>

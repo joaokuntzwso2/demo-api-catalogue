@@ -42,7 +42,12 @@
     "platform:post-onboard:loans": "node pipeline/scripts/apim-post-onboard.js loans-api",
     "platform:post-onboard:all": "node pipeline/scripts/apim-post-onboard.js --all-demo",
     "platform:app:subscriptions": "bash -lc 'CLIENT_RESPONSE=$(curl -ks -u admin:admin -H \"Content-Type: application/json\" -d \"{\"callbackUrl\":\"www.google.com\",\"clientName\":\"api-catalogue-app-check\",\"owner\":\"admin\",\"grantType\":\"password refresh_token client_credentials\",\"saasApp\":true}\" https://localhost:9443/client-registration/v0.17/register); CLIENT_ID=$(echo \"$CLIENT_RESPONSE\" | jq -r .clientId); CLIENT_SECRET=$(echo \"$CLIENT_RESPONSE\" | jq -r .clientSecret); TOKEN_RESPONSE=$(curl -ks -u \"$CLIENT_ID:$CLIENT_SECRET\" -H \"Content-Type: application/x-www-form-urlencoded\" -d \"grant_type=password&username=admin&password=admin&scope=apim:api_view apim:subscribe apim:app_manage apim:sub_manage\" https://localhost:9443/oauth2/token); ACCESS_TOKEN=$(echo \"$TOKEN_RESPONSE\" | jq -r .access_token); APP_ID=$(curl -ks -H \"Authorization: Bearer $ACCESS_TOKEN\" \"https://localhost:9443/api/am/devportal/v3/applications?limit=100\" | jq -r \".list[] | select(.name==\\\"API Catalogue Application\\\") | (.applicationId // .id)\"); echo \"Application ID: $APP_ID\"; curl -ks -H \"Authorization: Bearer $ACCESS_TOKEN\" \"https://localhost:9443/api/am/devportal/v3/subscriptions?applicationId=$APP_ID&limit=100\" | jq \".list[]? | {apiName: .apiInfo.name, apiVersion: .apiInfo.version, throttlingPolicy, status}\"'",
-    "platform:restart:fresh": "bash scripts/full-restart-with-service-catalog.sh"
+    "platform:restart:fresh": "bash scripts/full-restart-with-service-catalog.sh",
+    "platform:stop": "bash scripts/stop-platform.sh",
+    "platform:control": "node platform-control/server.js",
+    "platform:ui:install-onboarding-panel": "node scripts/install-ui-onboarding-panel.js",
+    "platform:control:start": "bash scripts/start-platform-control.sh",
+    "platform:control:stop": "bash scripts/stop-platform-control.sh"
   },
   "workspaces": [
     "apis/*",
