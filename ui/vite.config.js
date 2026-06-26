@@ -7,6 +7,11 @@ export default defineConfig({
     host: '0.0.0.0',
     port: 5173,
     proxy: {
+        '/api/runtime-control': {
+          target: 'http://host.docker.internal:6400',
+          changeOrigin: true,
+          secure: false
+        },
         '/api/contract-validation': {
           target: 'http://host.docker.internal:6400',
           changeOrigin: true,

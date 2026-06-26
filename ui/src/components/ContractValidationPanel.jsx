@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import "./ContractValidationPanel.css";
 
 function stringifyJson(value) {
@@ -13,14 +13,46 @@ function parseJson(label, value) {
   }
 }
 
+function normalizeText(value) {
+  return String(value || "").replace(/\s+/g, " ").trim();
+}
+
+function normalizeUpper(value) {
+  return normalizeText(value).toUpperCase();
+}
+
+function inferRuntimeActionFromText(value) {
+  const text = normalizeUpper(value);
+
+  if (
+    text.includes("RED") ||
+    text.includes("DOWN") ||
+    text.includes("FAILED") ||
+    text.includes("ERROR") ||
+    text.includes("UNKNOWN") ||
+    text.includes("GREY") ||
+    text.includes("GRAY") ||
+    text.includes("UNAVAILABLE")
+  ) {
+    return {
+      action: "start",
+      label: "Start API"
+    };
+  }
+
+  return {
+    action: "stop",
+    label: "Stop API"
+  };
+}
+
 async function readJsonResponse(response, label) {
   const contentType = response.headers.get("content-type") || "";
   const text = await response.text();
 
   if (!contentType.includes("application/json")) {
     throw new Error(
-      `${label} returned non-JSON response. This usually means the Vite proxy is missing. ` +
-        `HTTP ${response.status}. First bytes: ${text.slice(0, 80)}`
+      `${label} returned non-JSON response. HTTP ${response.status}. First bytes: ${text.slice(0, 80)}`
     );
   }
 
@@ -42,31 +74,50 @@ export default function ContractValidationPanel() {
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState("");
   const [result, setResult] = useState(null);
+  const [runtimeMessage, setRuntimeMessage] = useState("");
+  const [runtimeBusy, setRuntimeBusy] = useState(false);
+
+  const apisRef = useRef([]);
 
   const selectedApi = useMemo(
     () => apis.find((api) => api.name === selectedName),
     [apis, selectedName]
   );
 
-  async function loadOptions() {
-    setLoading(true);
+
+  function apiNameFromText(text) {
+    return apisRef.current.find((api) => String(text || "").includes(api.name))?.name || null;
+  }
+
+  function applyApiToEditor(api) {
+    if (!api) {
+      return;
+    }
+
+    setSelectedName(api.name);
+    setRequestText(stringifyJson(api.effectiveRequest));
+    setPayloadText(stringifyJson(api.effectivePayload));
+    setResult(null);
     setMessage("");
+  }
+
+  async function loadOptions(preferredApiName = selectedName) {
+    setLoading(true);
 
     try {
       const response = await fetch("/api/contract-validation/options");
       const data = await readJsonResponse(response, "Contract validation options");
       const loadedApis = data.apis || [];
 
+      apisRef.current = loadedApis;
       setApis(loadedApis);
 
       const nextSelected =
-        loadedApis.find((api) => api.name === selectedName) ||
+        loadedApis.find((api) => api.name === preferredApiName) ||
         loadedApis[0];
 
       if (nextSelected) {
-        setSelectedName(nextSelected.name);
-        setRequestText(stringifyJson(nextSelected.effectiveRequest));
-        setPayloadText(stringifyJson(nextSelected.effectivePayload));
+        applyApiToEditor(nextSelected);
       }
     } catch (e) {
       setMessage(e.message);
@@ -75,23 +126,265 @@ export default function ContractValidationPanel() {
     }
   }
 
-  useEffect(() => {
-    if (open) {
-      loadOptions();
+  function openForApi(apiName) {
+    if (!apiName) {
+      return;
     }
+
+    setOpen(true);
+    setResult(null);
+
+    const existingApi = apisRef.current.find((api) => api.name === apiName);
+
+    if (existingApi) {
+      applyApiToEditor(existingApi);
+      return;
+    }
+
+    setSelectedName(apiName);
+    loadOptions(apiName);
+  }
+
+  async function runRuntimeAction(apiName, action) {
+    if (!apiName || runtimeBusy) {
+      return;
+    }
+
+    setRuntimeBusy(true);
+    setRuntimeMessage(`${action === "stop" ? "Stopping" : "Starting"} ${apiName}...`);
+
+    try {
+      const response = await fetch("/api/runtime-control/services", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          apiName,
+          action
+        })
+      });
+
+      const data = await readJsonResponse(response, "Runtime control");
+
+      setRuntimeMessage(data.message || `${apiName} updated.`);
+
+      setTimeout(() => {
+        window.location.reload();
+      }, 1200);
+    } catch (e) {
+      setRuntimeMessage(e.message);
+    } finally {
+      setRuntimeBusy(false);
+    }
+  }
+
+  useEffect(() => {
+    loadOptions("");
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open]);
+  }, []);
+
+  useEffect(() => {
+    if (!apis.length) {
+      return undefined;
+    }
+
+    let decorateTimer = null;
+
+    function clearDecorations() {
+      document
+        .querySelectorAll(".contract-validation-contract-target")
+        .forEach((element) => {
+          element.classList.remove("contract-validation-contract-target");
+          element.removeAttribute("data-contract-validation-api-name");
+          element.removeAttribute("title");
+        });
+
+      document
+        .querySelectorAll(".api-runtime-control-target")
+        .forEach((element) => {
+          element.classList.remove("api-runtime-control-target");
+          element.removeAttribute("data-runtime-api-name");
+          element.removeAttribute("data-runtime-action");
+          element.removeAttribute("data-runtime-label");
+          element.removeAttribute("title");
+        });
+    }
+
+    function markContractTarget(element, apiName) {
+      if (!element || !apiName || element.closest(".contract-validation-modal")) {
+        return;
+      }
+
+      element.classList.add("contract-validation-contract-target");
+      element.setAttribute("data-contract-validation-api-name", apiName);
+      element.setAttribute("title", `Edit validation contract for ${apiName}`);
+    }
+
+    function markRuntimeTarget(element, apiName) {
+      if (!element || !apiName || element.closest(".contract-validation-modal")) {
+        return;
+      }
+
+      const { action, label } = inferRuntimeActionFromText(element.textContent);
+
+      element.classList.add("api-runtime-control-target");
+      element.setAttribute("data-runtime-api-name", apiName);
+      element.setAttribute("data-runtime-action", action);
+      element.setAttribute("data-runtime-label", label);
+      element.setAttribute("title", `${label} for ${apiName}`);
+    }
+
+    function decorateTableCells() {
+      document.querySelectorAll("table").forEach((table) => {
+        const headerCells = Array.from(table.querySelectorAll("thead th"));
+
+        if (!headerCells.length) {
+          return;
+        }
+
+        const contractIndex = headerCells.findIndex((header) => {
+          const label = normalizeUpper(header.textContent);
+          return label === "CONTRATO" || label === "CONTRACT";
+        });
+
+        const livenessIndex = headerCells.findIndex((header) => {
+          const label = normalizeUpper(header.textContent);
+          return label === "LIVENESS" || label === "LIVE";
+        });
+
+        table.querySelectorAll("tbody tr").forEach((row) => {
+          const apiName = apiNameFromText(row.textContent);
+          const cells = Array.from(row.children);
+
+          if (contractIndex >= 0) {
+            markContractTarget(cells[contractIndex], apiName);
+          }
+
+          if (livenessIndex >= 0) {
+            markRuntimeTarget(cells[livenessIndex], apiName);
+          }
+        });
+      });
+    }
+
+    function findNearestApiContainer(startElement) {
+      let current = startElement;
+
+      for (let depth = 0; current && current !== document.body && depth < 10; depth += 1) {
+        const apiName = apiNameFromText(current.textContent);
+
+        if (apiName) {
+          return {
+            element: current,
+            apiName
+          };
+        }
+
+        current = current.parentElement;
+      }
+
+      return null;
+    }
+
+    function decorateDetailLines() {
+      Array.from(document.querySelectorAll("*")).forEach((element) => {
+        const label = normalizeUpper(element.textContent);
+
+        if (
+          label !== "CONTRATO" &&
+          label !== "CONTRACT" &&
+          label !== "LIVENESS" &&
+          label !== "LIVE"
+        ) {
+          return;
+        }
+
+        if (element.closest(".contract-validation-modal")) {
+          return;
+        }
+
+        const apiContainer = findNearestApiContainer(element.parentElement);
+
+        if (!apiContainer) {
+          return;
+        }
+
+        const targetLine = element.parentElement || element;
+
+        if (label === "CONTRATO" || label === "CONTRACT") {
+          markContractTarget(targetLine, apiContainer.apiName);
+        }
+
+        if (label === "LIVENESS" || label === "LIVE") {
+          markRuntimeTarget(targetLine, apiContainer.apiName);
+        }
+      });
+    }
+
+    function decorate() {
+      clearDecorations();
+      decorateTableCells();
+      decorateDetailLines();
+    }
+
+    function handleClick(event) {
+      const contractTarget = event.target.closest?.(".contract-validation-contract-target");
+
+      if (contractTarget) {
+        const apiName = contractTarget.getAttribute("data-contract-validation-api-name");
+
+        if (apiName) {
+          event.preventDefault();
+          event.stopPropagation();
+          openForApi(apiName);
+          return;
+        }
+      }
+
+      const runtimeTarget = event.target.closest?.(".api-runtime-control-target");
+
+      if (runtimeTarget) {
+        const apiName = runtimeTarget.getAttribute("data-runtime-api-name");
+        const action = runtimeTarget.getAttribute("data-runtime-action");
+
+        if (apiName && action) {
+          event.preventDefault();
+          event.stopPropagation();
+          runRuntimeAction(apiName, action);
+        }
+      }
+    }
+
+    decorate();
+
+    const observer = new MutationObserver(() => {
+      clearTimeout(decorateTimer);
+      decorateTimer = setTimeout(decorate, 150);
+    });
+
+    observer.observe(document.body, {
+      childList: true,
+      subtree: true,
+      characterData: true
+    });
+
+    document.addEventListener("click", handleClick, true);
+
+    return () => {
+      clearTimeout(decorateTimer);
+      observer.disconnect();
+      document.removeEventListener("click", handleClick, true);
+      clearDecorations();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [apis, runtimeBusy]);
 
   function selectApi(name) {
     const api = apis.find((item) => item.name === name);
 
-    setSelectedName(name);
-    setResult(null);
-    setMessage("");
-
     if (api) {
-      setRequestText(stringifyJson(api.effectiveRequest));
-      setPayloadText(stringifyJson(api.effectivePayload));
+      applyApiToEditor(api);
     }
   }
 
@@ -120,7 +413,7 @@ export default function ContractValidationPanel() {
 
       setResult(data);
       setMessage("Overrides saved, MI validation redeployed, and probe triggered.");
-      await loadOptions();
+      await loadOptions(selectedName);
     } catch (e) {
       setMessage(e.message);
     } finally {
@@ -130,13 +423,11 @@ export default function ContractValidationPanel() {
 
   return (
     <>
-      <button
-        type="button"
-        className="contract-validation-launcher"
-        onClick={() => setOpen(true)}
-      >
-        Edit validation contracts
-      </button>
+      {runtimeMessage ? (
+        <div className="api-runtime-control-toast">
+          {runtimeMessage}
+        </div>
+      ) : null}
 
       {open ? (
         <div className="contract-validation-modal">
@@ -147,13 +438,13 @@ export default function ContractValidationPanel() {
               <div>
                 <h2>Contract validation editor</h2>
                 <p>
-                  Edit request and expected response contracts for already-deployed APIs,
-                  then redeploy MI validation artifacts and run the probe again.
+                  Edit request and expected response contracts for the selected API, then redeploy
+                  MI validation artifacts and run the probe again.
                 </p>
               </div>
 
               <div className="contract-validation-modal__header-actions">
-                <button type="button" onClick={loadOptions} disabled={loading}>
+                <button type="button" onClick={() => loadOptions(selectedName)} disabled={loading}>
                   Refresh
                 </button>
                 <button type="button" onClick={() => setOpen(false)} disabled={loading}>
@@ -225,6 +516,7 @@ export default function ContractValidationPanel() {
                   {
                     status: result.status,
                     apiName: result.apiName,
+                    miReadiness: result.miReadiness,
                     probe: result.probe,
                     reconcileExitCode: result.reconcile?.code
                   },

@@ -1092,6 +1092,38 @@ function contractValidationRun(command, args = []) {
   });
 }
 
+function contractValidationSleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function contractValidationWaitForMi() {
+  const startedAt = Date.now();
+  const timeoutMs = 90000;
+
+  while (Date.now() - startedAt < timeoutMs) {
+    try {
+      const response = await fetch('http://localhost:8290/customer-360/v1/health');
+
+      if (response.ok) {
+        return {
+          status: 'READY',
+          waitedMs: Date.now() - startedAt
+        };
+      }
+    } catch (e) {
+      // MI is still restarting.
+    }
+
+    await contractValidationSleep(3000);
+  }
+
+  return {
+    status: 'TIMEOUT',
+    waitedMs: Date.now() - startedAt
+  };
+}
+
+
 function contractValidationReadBody(req) {
   return new Promise((resolve, reject) => {
     let body = '';
@@ -1211,17 +1243,49 @@ function handleContractValidationRoute(req, res) {
         contractValidationWriteJson(REQUEST_OVERRIDES_FILE, requestOverrides);
         contractValidationWriteJson(PAYLOAD_OVERRIDES_FILE, payloadOverrides);
 
-        const reconcile = await contractValidationRun('npm', ['run', 'platform:reconcile-once']);
+        const syncArtifacts = await contractValidationRun('docker-compose', [
+          '--profile',
+          'platform',
+          'run',
+          '--rm',
+          '-e',
+          'APIM_ALLOW_INSECURE_TLS=true',
+          'apictl',
+          'node pipeline/scripts/sync-mi-health-from-apim.js'
+        ]);
+
+        const restartMi = syncArtifacts.code === 0
+          ? await contractValidationRun('docker-compose', [
+              '--profile',
+              'platform',
+              'up',
+              '-d',
+              '--force-recreate',
+              'wso2-integrator'
+            ])
+          : {
+              code: 1,
+              stdout: '',
+              stderr: 'Skipped MI restart because sync-mi-health-from-apim.js failed.'
+            };
+
+        const reconcile = {
+          code: syncArtifacts.code === 0 && restartMi.code === 0 ? 0 : 1,
+          syncArtifacts,
+          restartMi
+        };
 
         if (reconcile.code !== 0) {
           contractValidationSendJson(res, 500, {
             status: 'ERROR',
-            message: 'Reconcile failed',
+            message: 'MI-only reconcile failed',
             apiName,
             reconcile
           });
           return;
         }
+
+        const miReadiness = await contractValidationWaitForMi();
 
         let probe = null;
 
@@ -1260,10 +1324,467 @@ function handleContractValidationRoute(req, res) {
 /* CONTRACT_VALIDATION_ROUTES_END */
 
 
+
+
+
+
+/* API_RUNTIME_CONTROL_ROUTES_START */
+/*
+ * Runtime controls for demo backend APIs.
+ *
+ * Stop:
+ * - stops the Docker Compose API service
+ * - preserves the deployed API row
+ * - writes RED directly to health-status-cache using the previous full metadata
+ *
+ * Start:
+ * - starts the Docker Compose API service
+ * - triggers MI probe so the API becomes GREEN again
+ */
+function apiRuntimeControlSendJson(res, statusCode, body) {
+  const json = JSON.stringify(body, null, 2);
+
+  res.writeHead(statusCode, {
+    'Content-Type': 'application/json',
+    'Content-Length': Buffer.byteLength(json)
+  });
+
+  res.end(json);
+}
+
+function apiRuntimeControlReadJson(file, fallback = {}) {
+  if (!fs.existsSync(file)) {
+    return fallback;
+  }
+
+  try {
+    return JSON.parse(fs.readFileSync(file, 'utf8'));
+  } catch (e) {
+    throw new Error(`Invalid JSON file ${file}: ${e.message}`);
+  }
+}
+
+function apiRuntimeControlReadBody(req) {
+  return new Promise((resolve, reject) => {
+    let body = '';
+
+    req.on('data', (chunk) => {
+      body += chunk.toString();
+
+      if (body.length > 512 * 1024) {
+        reject(new Error('Request body is too large'));
+        req.destroy();
+      }
+    });
+
+    req.on('end', () => resolve(body));
+    req.on('error', reject);
+  });
+}
+
+function apiRuntimeControlRun(command, args = [], timeoutMs = 30000) {
+  return new Promise((resolve) => {
+    const child = require('child_process').spawn(command, args, {
+      cwd: REPO_ROOT,
+      env: process.env,
+      shell: false
+    });
+
+    let stdout = '';
+    let stderr = '';
+    let completed = false;
+
+    const timeout = setTimeout(() => {
+      if (completed) {
+        return;
+      }
+
+      completed = true;
+
+      try {
+        child.kill('SIGKILL');
+      } catch (e) {
+        // ignore
+      }
+
+      resolve({
+        code: 124,
+        stdout,
+        stderr: stderr + `\nTimed out after ${timeoutMs}ms`
+      });
+    }, timeoutMs);
+
+    child.stdout.on('data', (data) => {
+      stdout += data.toString();
+    });
+
+    child.stderr.on('data', (data) => {
+      stderr += data.toString();
+    });
+
+    child.on('error', (error) => {
+      if (completed) {
+        return;
+      }
+
+      completed = true;
+      clearTimeout(timeout);
+
+      resolve({
+        code: 1,
+        stdout,
+        stderr: stderr + `\n${error.message}`
+      });
+    });
+
+    child.on('close', (code) => {
+      if (completed) {
+        return;
+      }
+
+      completed = true;
+      clearTimeout(timeout);
+
+      resolve({
+        code,
+        stdout,
+        stderr
+      });
+    });
+  });
+}
+
+function apiRuntimeControlKnownApis() {
+  const defaults = apiRuntimeControlReadJson(CONTRACT_DEFAULTS_FILE, {});
+  return Object.keys(defaults).sort();
+}
+
+function apiRuntimeControlServiceName(apiName) {
+  if (!apiName || typeof apiName !== 'string') {
+    return null;
+  }
+
+  if (!/^[a-z0-9-]+-api$/.test(apiName)) {
+    return null;
+  }
+
+  const knownApis = apiRuntimeControlKnownApis();
+
+  if (!knownApis.includes(apiName)) {
+    return null;
+  }
+
+  return apiName;
+}
+
+async function apiRuntimeControlDockerState(serviceName) {
+  const ps = await apiRuntimeControlRun('docker-compose', [
+    '--profile',
+    'platform',
+    'ps',
+    '-q',
+    serviceName
+  ], 8000);
+
+  const containerId = String(ps.stdout || '').trim();
+
+  if (!containerId) {
+    return {
+      serviceName,
+      containerId: null,
+      state: 'missing',
+      ps
+    };
+  }
+
+  const inspect = await apiRuntimeControlRun('docker', [
+    'inspect',
+    '-f',
+    '{{.State.Status}}',
+    containerId
+  ], 8000);
+
+  return {
+    serviceName,
+    containerId,
+    state: String(inspect.stdout || '').trim() || 'unknown',
+    ps,
+    inspect
+  };
+}
+
+async function apiRuntimeControlFetchWithTimeout(url, options = {}, timeoutMs = 8000) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const response = await fetch(url, {
+      ...options,
+      signal: controller.signal
+    });
+
+    let body = null;
+
+    try {
+      body = await response.json();
+    } catch (e) {
+      body = await response.text();
+    }
+
+    return {
+      status: response.ok ? 'OK' : 'ERROR',
+      httpStatus: response.status,
+      body
+    };
+  } catch (e) {
+    return {
+      status: 'ERROR',
+      message: e.name === 'AbortError'
+        ? `Timed out after ${timeoutMs}ms`
+        : e.message
+    };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function apiRuntimeControlGetCachedResults() {
+  const response = await apiRuntimeControlFetchWithTimeout(
+    'http://localhost:6300/cache/results',
+    {
+      method: 'GET'
+    },
+    5000
+  );
+
+  if (response.status !== 'OK' || !Array.isArray(response.body)) {
+    return [];
+  }
+
+  return response.body;
+}
+
+async function apiRuntimeControlPostCacheRecord(record) {
+  return apiRuntimeControlFetchWithTimeout(
+    'http://localhost:6300/cache/results',
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(record)
+    },
+    5000
+  );
+}
+
+async function apiRuntimeControlTriggerProbe() {
+  return apiRuntimeControlFetchWithTimeout(
+    'http://localhost:8290/health-registry/v1/probes/run',
+    {
+      method: 'POST'
+    },
+    12000
+  );
+}
+
+async function apiRuntimeControlWriteStoppedResult(apiName, serviceName, dockerState) {
+  const results = await apiRuntimeControlGetCachedResults();
+
+  const previous = results.find((record) =>
+    record &&
+    record.name === apiName &&
+    String(record.version || '1.0.0') === '1.0.0'
+  );
+
+  const now = new Date().toISOString();
+
+  const targetMs =
+    previous && previous.slaTargetMs
+      ? previous.slaTargetMs
+      : previous && previous.sla && previous.sla.targetMs
+        ? previous.sla.targetMs
+        : 300;
+
+  const stoppedRecord = {
+    ...(previous || {}),
+    name: apiName,
+    version: previous && previous.version ? previous.version : '1.0.0',
+    consumerStatus: 'RED',
+    checkedAt: now,
+    source: 'platform-control',
+    liveness: {
+      ...(previous && previous.liveness ? previous.liveness : {}),
+      status: 'FAILED',
+      httpStatus: 0,
+      responseTimeMs: 0,
+      checkedAt: now,
+      reasons: [
+        `Docker Compose service ${serviceName} is stopped.`,
+        `Docker state: ${dockerState && dockerState.state ? dockerState.state : 'unknown'}`
+      ]
+    },
+    contract: {
+      ...(previous && previous.contract ? previous.contract : {}),
+      status: 'SKIPPED',
+      checkedAt: now,
+      reasons: [
+        'Contract validation skipped because liveness check failed.'
+      ]
+    },
+    sla: {
+      ...(previous && previous.sla ? previous.sla : {}),
+      status: 'BREACHED',
+      checkedAt: now,
+      targetMs,
+      actualMs: 0
+    }
+  };
+
+  return apiRuntimeControlPostCacheRecord(stoppedRecord);
+}
+
+function handleApiRuntimeControlRoute(req, res) {
+  const requestUrl = new URL(req.url, 'http://localhost');
+
+  if (requestUrl.pathname === '/api/runtime-control/options' && req.method === 'GET') {
+    try {
+      const apis = apiRuntimeControlKnownApis().map((apiName) => ({
+        name: apiName,
+        serviceName: apiRuntimeControlServiceName(apiName)
+      }));
+
+      apiRuntimeControlSendJson(res, 200, {
+        status: 'OK',
+        source: 'platform-control',
+        apis
+      });
+    } catch (e) {
+      apiRuntimeControlSendJson(res, 500, {
+        status: 'ERROR',
+        message: e.message
+      });
+    }
+
+    return true;
+  }
+
+  if (requestUrl.pathname === '/api/runtime-control/services' && req.method === 'POST') {
+    apiRuntimeControlReadBody(req)
+      .then(async (rawBody) => {
+        let body = {};
+
+        try {
+          body = rawBody ? JSON.parse(rawBody) : {};
+        } catch (e) {
+          apiRuntimeControlSendJson(res, 400, {
+            status: 'ERROR',
+            message: `Invalid JSON request body: ${e.message}`
+          });
+          return;
+        }
+
+        const apiName = body.apiName;
+        const action = body.action;
+        const serviceName = apiRuntimeControlServiceName(apiName);
+
+        if (!serviceName) {
+          apiRuntimeControlSendJson(res, 400, {
+            status: 'ERROR',
+            message: `Unknown or unsupported API service: ${apiName}`
+          });
+          return;
+        }
+
+        if (action !== 'stop' && action !== 'start') {
+          apiRuntimeControlSendJson(res, 400, {
+            status: 'ERROR',
+            message: "action must be 'stop' or 'start'"
+          });
+          return;
+        }
+
+        const before = await apiRuntimeControlDockerState(serviceName);
+
+        const commandArgs = action === 'stop'
+          ? ['--profile', 'platform', 'stop', serviceName]
+          : ['--profile', 'platform', 'up', '-d', serviceName];
+
+        const runtime = await apiRuntimeControlRun(
+          'docker-compose',
+          commandArgs,
+          action === 'stop' ? 15000 : 30000
+        );
+
+        const after = await apiRuntimeControlDockerState(serviceName);
+
+        if (runtime.code !== 0) {
+          apiRuntimeControlSendJson(res, 500, {
+            status: 'ERROR',
+            message: `Failed to ${action} ${serviceName}`,
+            apiName,
+            serviceName,
+            action,
+            before,
+            after,
+            runtime
+          });
+          return;
+        }
+
+        const forcedStatus = action === 'stop'
+          ? await apiRuntimeControlWriteStoppedResult(apiName, serviceName, after)
+          : {
+              status: 'SKIPPED',
+              reason: 'Start action relies on MI probe to restore GREEN status.'
+            };
+
+        const probe = action === 'start'
+          ? await apiRuntimeControlTriggerProbe()
+          : {
+              status: 'SKIPPED',
+              reason: 'Stop action already wrote RED status after Docker stop.'
+            };
+
+        apiRuntimeControlSendJson(res, 200, {
+          status: 'COMPLETED',
+          message: `${serviceName} ${action === 'stop' ? 'stopped and marked RED' : 'started and MI probe requested'}`,
+          apiName,
+          serviceName,
+          action,
+          before,
+          after,
+          runtime,
+          forcedStatus,
+          probe
+        });
+      })
+      .catch((e) => {
+        apiRuntimeControlSendJson(res, 500, {
+          status: 'ERROR',
+          message: e.message
+        });
+      });
+
+    return true;
+  }
+
+  return false;
+}
+/* API_RUNTIME_CONTROL_ROUTES_END */
+
+
+
+
+
 const server = http.createServer(async (req, res) => {
   if (handleContractValidationRoute(req, res)) {
     return;
   }
+  if (handleApiRuntimeControlRoute(req, res)) {
+    return;
+  }
+
 
   try {
     const url = new URL(req.url, `http://${req.headers.host}`);

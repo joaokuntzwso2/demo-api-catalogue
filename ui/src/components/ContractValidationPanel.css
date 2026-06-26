@@ -1,16 +1,60 @@
-.contract-validation-launcher {
+.contract-validation-contract-target,
+.api-runtime-control-target {
+  cursor: pointer !important;
+  position: relative;
+  border-radius: 10px;
+}
+
+.contract-validation-contract-target:hover {
+  outline: 2px solid rgba(37, 99, 235, 0.55);
+  outline-offset: -2px;
+  background: rgba(37, 99, 235, 0.08);
+}
+
+.api-runtime-control-target:hover {
+  outline: 2px solid rgba(245, 158, 11, 0.7);
+  outline-offset: -2px;
+  background: rgba(245, 158, 11, 0.12);
+}
+
+.contract-validation-contract-target:hover::after,
+.api-runtime-control-target:hover::after {
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  padding: 6px 10px;
+  border-radius: 999px;
+  color: #ffffff;
+  font-size: 0.72rem;
+  font-weight: 800;
+  pointer-events: none;
+  white-space: nowrap;
+  z-index: 20;
+}
+
+.contract-validation-contract-target:hover::after {
+  content: "Edit validation";
+  background: #172554;
+}
+
+.api-runtime-control-target:hover::after {
+  content: attr(data-runtime-label);
+  background: #92400e;
+}
+
+.api-runtime-control-toast {
   position: fixed;
   right: 24px;
-  bottom: 86px;
-  z-index: 40;
-  cursor: pointer;
-  padding: 12px 18px;
-  border: 0;
-  border-radius: 999px;
+  bottom: 24px;
+  z-index: 120;
+  max-width: 460px;
+  padding: 14px 18px;
+  border-radius: 14px;
+  background: #0f172a;
+  color: #e2e8f0;
   font-weight: 700;
-  background: #172554;
-  color: #ffffff;
-  box-shadow: 0 12px 28px rgba(15, 23, 42, 0.22);
+  box-shadow: 0 18px 50px rgba(15, 23, 42, 0.3);
 }
 
 .contract-validation-modal {
@@ -159,3 +203,4 @@
     flex-direction: column;
   }
 }
+

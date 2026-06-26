@@ -1533,3 +1533,243 @@ main().catch((error) => {
   console.error(error);
   process.exit(1);
 });
+
+/* HEALTH_FAILURE_POST_PROCESSOR_START */
+/*
+ * Add timeout + metadata-preserving fault handlers to generated MI health checks.
+ *
+ * When a backend API container is stopped, the normal check can fault before the
+ * successful cache-write path runs. This fault handler writes a RED result using
+ * the same catalogue metadata as the normal check record, so the cache/UI updates
+ * the existing deployed API row instead of creating an incomplete duplicate row.
+ */
+function postProcessGeneratedHealthFailureSequences() {
+  const fs = require("fs");
+  const path = require("path");
+
+  const sequencesDir = path.join(
+    process.cwd(),
+    "wso2-integrator",
+    "catalogue-health-mi",
+    "src",
+    "main",
+    "wso2mi",
+    "artifacts",
+    "sequences"
+  );
+
+  if (!fs.existsSync(sequencesDir)) {
+    return;
+  }
+
+  function escapeForJsSingleQuoted(value) {
+    return String(value || "")
+      .replace(/\\/g, "\\\\")
+      .replace(/'/g, "\\'");
+  }
+
+  function readGeneratedValue(xml, key, fallback = "") {
+    const patterns = [
+      new RegExp(`${key}\\s*:\\s*'([^']*)'`),
+      new RegExp(`${key}\\s*:\\s*"([^"]*)"`),
+      new RegExp(`"${key}"\\s*:\\s*"([^"]*)"`),
+      new RegExp(`"${key}"\\s*:\\s*'([^']*)'`)
+    ];
+
+    for (const pattern of patterns) {
+      const match = xml.match(pattern);
+
+      if (match) {
+        return match[1];
+      }
+    }
+
+    return fallback;
+  }
+
+  function readGeneratedNumber(xml, key, fallback = 0) {
+    const pattern = new RegExp(`${key}\\s*:\\s*(\\d+)`);
+    const match = xml.match(pattern);
+
+    if (match) {
+      return Number(match[1]);
+    }
+
+    return fallback;
+  }
+
+  const checkFiles = fs
+    .readdirSync(sequencesDir)
+    .filter((file) => /^check_.*_api_.*\.xml$/.test(file));
+
+  for (const file of checkFiles) {
+    const checkPath = path.join(sequencesDir, file);
+    let xml = fs.readFileSync(checkPath, "utf8");
+
+    const sequenceNameMatch = xml.match(/<sequence[^>]*\sname="([^"]+)"/);
+    if (!sequenceNameMatch) {
+      continue;
+    }
+
+    const checkSequenceName = sequenceNameMatch[1];
+    const faultSequenceName = `fault_${checkSequenceName}`;
+
+    const apiNameFromSequence = checkSequenceName
+      .replace(/^check_/, "")
+      .replace(/_\d+_\d+_\d+$/, "")
+      .replace(/_/g, "-");
+
+    const versionMatch = checkSequenceName.match(/_(\d+)_(\d+)_(\d+)$/);
+    const versionFromSequence = versionMatch
+      ? `${versionMatch[1]}.${versionMatch[2]}.${versionMatch[3]}`
+      : "1.0.0";
+
+    const apiName = readGeneratedValue(xml, "name", apiNameFromSequence);
+    const version = readGeneratedValue(xml, "version", versionFromSequence);
+    const domain = readGeneratedValue(xml, "domain", "");
+    const owner = readGeneratedValue(xml, "owner", "");
+    const ownerEmail = readGeneratedValue(xml, "ownerEmail", "");
+    const runtime = readGeneratedValue(xml, "runtime", "");
+    const criticality = readGeneratedValue(xml, "criticality", "");
+    const checkFrequency = readGeneratedValue(xml, "checkFrequency", "");
+    const healthUrl = readGeneratedValue(xml, "healthUrl", "");
+    const contractUrl = readGeneratedValue(xml, "contractUrl", healthUrl);
+    const expectedHttpStatus = readGeneratedNumber(xml, "expectedHttpStatus", 200);
+    const slaTargetMs = readGeneratedNumber(xml, "slaTargetMs", 300);
+
+    if (!xml.includes(`onError="${faultSequenceName}"`)) {
+      xml = xml.replace(
+        /<sequence\b([^>]*)>/,
+        (match, attrs) => {
+          if (attrs.includes("onError=")) {
+            return match;
+          }
+
+          return `<sequence${attrs} onError="${faultSequenceName}">`;
+        }
+      );
+    }
+
+    xml = xml.replace(
+      /<http\s+([^>]*uri-template="http:\/\/[^"]+-api:\d+[^"]*"[^>]*)\/>/g,
+      (_match, attrs) => {
+        if (attrs.includes("health-status-cache")) {
+          return `<http ${attrs}/>`;
+        }
+
+        return `<http ${attrs}>
+                <timeout>
+                    <duration>3000</duration>
+                    <responseAction>fault</responseAction>
+                </timeout>
+                <suspendOnFailure>
+                    <initialDuration>1000</initialDuration>
+                    <progressionFactor>1.0</progressionFactor>
+                    <maximumDuration>3000</maximumDuration>
+                </suspendOnFailure>
+                <markForSuspension>
+                    <retriesBeforeSuspension>0</retriesBeforeSuspension>
+                </markForSuspension>
+            </http>`;
+      }
+    );
+
+    fs.writeFileSync(checkPath, xml);
+
+    const faultXml = `<?xml version="1.0" encoding="UTF-8"?>
+<sequence name="${faultSequenceName}" trace="disable" xmlns="http://ws.apache.org/ns/synapse">
+    <log level="custom">
+        <property name="health.check.failure" value="${escapeForJsSingleQuoted(apiName)} backend call failed; writing RED cache result"/>
+    </log>
+    <script language="js"><![CDATA[
+        var now = new Date().toISOString();
+
+        function text(value, fallback) {
+            if (value === null || value === undefined || String(value).length === 0) {
+                return fallback;
+            }
+
+            return String(value);
+        }
+
+        var errorCode = text(mc.getProperty('ERROR_CODE'), 'BACKEND_UNAVAILABLE');
+        var errorMessage = text(
+            mc.getProperty('ERROR_MESSAGE') || mc.getProperty('ERROR_DETAIL'),
+            'Backend endpoint is unavailable or did not respond.'
+        );
+
+        mc.setPayloadJSON({
+            name: '${escapeForJsSingleQuoted(apiName)}',
+            version: '${escapeForJsSingleQuoted(version)}',
+            domain: '${escapeForJsSingleQuoted(domain)}',
+            owner: '${escapeForJsSingleQuoted(owner)}',
+            ownerEmail: '${escapeForJsSingleQuoted(ownerEmail)}',
+            runtime: '${escapeForJsSingleQuoted(runtime)}',
+            criticality: '${escapeForJsSingleQuoted(criticality)}',
+            checkFrequency: '${escapeForJsSingleQuoted(checkFrequency)}',
+            healthUrl: '${escapeForJsSingleQuoted(healthUrl)}',
+            contractUrl: '${escapeForJsSingleQuoted(contractUrl)}',
+            expectedHttpStatus: ${expectedHttpStatus},
+            slaTargetMs: ${slaTargetMs},
+            consumerStatus: 'RED',
+            checkedAt: now,
+            source: 'wso2-integrator',
+            liveness: {
+                status: 'ERROR',
+                httpStatus: 0,
+                responseTimeMs: 0,
+                checkedAt: now,
+                reasons: [
+                    'Liveness check failed because the backend endpoint is unavailable.',
+                    errorCode + ': ' + errorMessage
+                ]
+            },
+            contract: {
+                status: 'SKIPPED',
+                checkedAt: now,
+                reasons: [
+                    'Contract validation skipped because liveness check failed.'
+                ]
+            },
+            sla: {
+                status: 'BREACHED',
+                checkedAt: now,
+                targetMs: ${slaTargetMs},
+                actualMs: 0
+            }
+        });
+    ]]></script>
+    <property name="messageType" value="application/json" scope="axis2"/>
+    <property name="ContentType" value="application/json" scope="axis2"/>
+    <property name="HTTP_METHOD" value="POST" scope="axis2"/>
+    <call>
+        <endpoint>
+            <http method="POST" uri-template="http://health-status-cache:6300/cache/results">
+                <timeout>
+                    <duration>3000</duration>
+                    <responseAction>fault</responseAction>
+                </timeout>
+            </http>
+        </endpoint>
+    </call>
+</sequence>
+`;
+
+    fs.writeFileSync(path.join(sequencesDir, `${faultSequenceName}.xml`), faultXml);
+  }
+
+  if (checkFiles.length > 0) {
+    console.log(`[sync-mi-health-from-apim] added metadata-preserving timeout/fault handlers to ${checkFiles.length} generated health check sequence(s)`);
+  }
+}
+
+process.on("beforeExit", () => {
+  try {
+    postProcessGeneratedHealthFailureSequences();
+  } catch (e) {
+    console.error(`[sync-mi-health-from-apim] health failure post-processing failed: ${e.message}`);
+    process.exitCode = 1;
+  }
+});
+/* HEALTH_FAILURE_POST_PROCESSOR_END */
+

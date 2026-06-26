@@ -1,0 +1,77 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<sequence name="fault_check_accounts_api_1_0_0" trace="disable" xmlns="http://ws.apache.org/ns/synapse">
+    <log level="custom">
+        <property name="health.check.failure" value="accounts-api backend call failed; writing RED cache result"/>
+    </log>
+    <script language="js"><![CDATA[
+        var now = new Date().toISOString();
+
+        function text(value, fallback) {
+            if (value === null || value === undefined || String(value).length === 0) {
+                return fallback;
+            }
+
+            return String(value);
+        }
+
+        var errorCode = text(mc.getProperty('ERROR_CODE'), 'BACKEND_UNAVAILABLE');
+        var errorMessage = text(
+            mc.getProperty('ERROR_MESSAGE') || mc.getProperty('ERROR_DETAIL'),
+            'Backend endpoint is unavailable or did not respond.'
+        );
+
+        mc.setPayloadJSON({
+            name: 'accounts-api',
+            version: '1.0.0',
+            domain: '',
+            owner: '',
+            ownerEmail: '',
+            runtime: '',
+            criticality: '',
+            checkFrequency: '',
+            healthUrl: '',
+            contractUrl: '',
+            expectedHttpStatus: 200,
+            slaTargetMs: 300,
+            consumerStatus: 'RED',
+            checkedAt: now,
+            source: 'wso2-integrator',
+            liveness: {
+                status: 'ERROR',
+                httpStatus: 0,
+                responseTimeMs: 0,
+                checkedAt: now,
+                reasons: [
+                    'Liveness check failed because the backend endpoint is unavailable.',
+                    errorCode + ': ' + errorMessage
+                ]
+            },
+            contract: {
+                status: 'SKIPPED',
+                checkedAt: now,
+                reasons: [
+                    'Contract validation skipped because liveness check failed.'
+                ]
+            },
+            sla: {
+                status: 'BREACHED',
+                checkedAt: now,
+                targetMs: 300,
+                actualMs: 0
+            }
+        });
+    ]]></script>
+    <property name="messageType" value="application/json" scope="axis2"/>
+    <property name="ContentType" value="application/json" scope="axis2"/>
+    <property name="HTTP_METHOD" value="POST" scope="axis2"/>
+    <call>
+        <endpoint>
+            <http method="POST" uri-template="http://health-status-cache:6300/cache/results">
+                <timeout>
+                    <duration>3000</duration>
+                    <responseAction>fault</responseAction>
+                </timeout>
+            </http>
+        </endpoint>
+    </call>
+</sequence>
