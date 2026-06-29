@@ -64,7 +64,7 @@
     <property name="messageType" value="application/json" scope="axis2"/>
     <property name="ContentType" value="application/json" scope="axis2"/>
     <property name="HTTP_METHOD" value="POST" scope="axis2"/>
-    <call>
+      <call>
         <endpoint>
             <http method="POST" uri-template="http://health-status-cache:6300/cache/results">
                 <timeout>

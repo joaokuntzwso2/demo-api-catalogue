@@ -32,6 +32,42 @@ async function readJson(response) {
   return JSON.parse(text);
 }
 
+
+
+function clickableHealthUrl(api) {
+  return (
+    api?.gatewayHealthBrowserUrl ||
+    api?.healthBrowserUrl ||
+    api?.healthUrl ||
+    ""
+  );
+}
+
+function HealthUrlLink({ api }) {
+  const displayUrl = clickableHealthUrl(api);
+  const invokeUrl = api?.secureHealthInvokeUrl || displayUrl;
+
+  if (!displayUrl) {
+    return <span className="muted">—</span>;
+  }
+
+  return (
+    <a
+      className="health-url-link"
+      href={invokeUrl}
+      target="_blank"
+      rel="noreferrer"
+      title="Invoke the APIM-published endpoint through platform-control with the OAuth application token"
+    >
+      {displayUrl}
+    </a>
+  );
+}
+
+function displayApiName(api) {
+  return api?.displayName || api?.apiDisplayName || api?.name || 'unknown-api';
+}
+
 function statusRank(status) {
   const index = statusOrder.indexOf(status || 'UNKNOWN');
   return index === -1 ? statusOrder.indexOf('UNKNOWN') : index;
@@ -60,7 +96,7 @@ function App() {
   const [filter, setFilter] = useState('');
   const [selected, setSelected] = useState(null);
   const [loading, setLoading] = useState(false);
-  const [lastLoadError, setLastLoadError] = useState(null);
+  const [lastLoadError, setLastLoadError] = useState(null); const [syncingCatalogue, setSyncingCatalogue] = useState(false); const [syncMessage, setSyncMessage] = useState(null);
 
   async function load() {
     setLoading(true);
@@ -100,7 +136,41 @@ function App() {
     }
   }
 
-  useEffect(() => {
+  async function syncCatalogue() {
+  setSyncingCatalogue(true);
+  setLastLoadError(null);
+  setSyncMessage("Sincronizando assinaturas do DevPortal e reexecutando avaliação...");
+
+  try {
+    const response = await fetch("/api/catalogue-sync/run", {
+      method: "POST"
+    });
+
+    const text = await response.text();
+    const payload = text ? JSON.parse(text) : {};
+
+    if (!response.ok) {
+      throw new Error(payload.message || text || `HTTP ${response.status}`);
+    }
+
+    setSyncMessage(payload.message || "Catálogo sincronizado e avaliação executada.");
+    await load();
+
+    setTimeout(() => {
+      load();
+    }, 2500);
+
+    setTimeout(() => {
+      load();
+    }, 7000);
+  } catch (error) {
+    console.error("[catalogue-ui] Failed to sync catalogue subscriptions", error);
+    setLastLoadError(error.message || String(error));
+    setSyncMessage(null);
+  } finally {
+    setSyncingCatalogue(false);
+  }
+} useEffect(() => {
     load();
   }, []);
 
@@ -137,11 +207,11 @@ function App() {
         </div>
 
         <button onClick={load} disabled={loading}>
-          <RefreshCcw size={16} /> Atualizar leitura
+          <RefreshCcw size={16} /> Atualizar leitura</button> <button className="ghost" onClick={syncCatalogue} disabled={syncingCatalogue || loading}>{syncingCatalogue ? 'Sincronizando...' : 'Sync assinaturas & avaliar'}
         </button>
       </section>
 
-      {lastLoadError ? (
+      {syncMessage ? ( <div className="sync-message">{syncMessage}</div> ) : null} {lastLoadError ? (
         <section className="toolbar">
           <span style={{ color: '#b42318' }}>
             Erro ao carregar status: {lastLoadError}
@@ -212,7 +282,7 @@ function App() {
                   className={selected?.apiId === api.apiId ? 'selected' : ''}
                 >
                   <td>
-                    <strong>{api.name}</strong>
+                    <strong>{displayApiName(api)}</strong>
                     <small>{api.version} · {api.lifecycle}</small>
                   </td>
 
@@ -277,7 +347,7 @@ function App() {
         <aside className="details">
           {selected ? (
             <>
-              <h2>{selected.name}</h2>
+              <h2>{displayApiName(selected)}</h2>
               <Badge status={selected.consumerStatus} />
 
               <dl>
@@ -308,7 +378,7 @@ function App() {
                 </dd>
 
                 <dt>Health URL</dt>
-                <dd className="url">{selected.healthUrl || 'Pendente'}</dd>
+                <dd className="url"><HealthUrlLink api={selected} /></dd>
 
                 <dt>Último check executado pelo MI</dt>
                 <dd>

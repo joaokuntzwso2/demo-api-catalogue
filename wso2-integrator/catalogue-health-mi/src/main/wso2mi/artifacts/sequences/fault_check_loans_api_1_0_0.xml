@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<sequence name="fault_check_payments_api_1_0_0" trace="disable" xmlns="http://ws.apache.org/ns/synapse">
+<sequence name="fault_check_loans_api_1_0_0" trace="disable" xmlns="http://ws.apache.org/ns/synapse">
     <log level="custom">
-        <property name="health.check.failure" value="payments-api backend call failed; writing RED cache result"/>
+        <property name="health.check.failure" value="loans-api backend call failed; writing RED cache result"/>
     </log>
     <script language="js"><![CDATA[
         var now = new Date().toISOString();
@@ -21,7 +21,7 @@
         );
 
         mc.setPayloadJSON({
-            name: 'payments-api',
+            name: 'loans-api',
             version: '1.0.0',
             domain: '',
             owner: '',

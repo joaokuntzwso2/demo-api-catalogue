@@ -1255,7 +1255,7 @@ function handleContractValidationRoute(req, res) {
           '-e',
           'APIM_ALLOW_INSECURE_TLS=true',
           'apictl',
-          'node pipeline/scripts/sync-mi-health-from-apim.js'
+          'npm run platform:reconcile:container'
         ]);
 
         const restartMi = syncArtifacts.code === 0
@@ -1884,7 +1884,1983 @@ function handleApiRuntimeControlRoute(req, res) {
 
 
 
+
+/* DEVPORTAL_CATALOGUE_STATUS_ROUTES_START */
+let devPortalLastSubscriptionFingerprint = null;
+let devPortalReconcileInFlight = false;
+
+function devPortalBasicAuth(username, password) {
+  return Buffer.from(`${username}:${password}`).toString('base64');
+}
+
+async function devPortalRequestJson(url, options = {}) {
+  const response = await fetch(url, options);
+  const text = await response.text();
+
+  let payload = {};
+  try {
+    payload = text ? JSON.parse(text) : {};
+  } catch {
+    payload = text;
+  }
+
+  if (!response.ok) {
+    const body = typeof payload === 'string' ? payload : JSON.stringify(payload);
+    throw new Error(`HTTP ${response.status} ${options.method || 'GET'} ${url}: ${body}`);
+  }
+
+  return payload;
+}
+
+async function devPortalRegisterClient(scopes) {
+  const client = await devPortalRequestJson(`${APIM_HOST}/client-registration/v0.17/register`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Basic ${devPortalBasicAuth(APIM_USERNAME, APIM_PASSWORD)}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      callbackUrl: 'www.google.com',
+      clientName: `api-catalogue-ui-devportal-${Date.now()}`,
+      owner: APIM_USERNAME,
+      grantType: 'password refresh_token client_credentials',
+      saasApp: true
+    })
+  });
+
+  const params = new URLSearchParams();
+  params.set('grant_type', 'password');
+  params.set('username', APIM_USERNAME);
+  params.set('password', APIM_PASSWORD);
+  params.set('scope', scopes.join(' '));
+
+  const token = await devPortalRequestJson(`${APIM_HOST}/oauth2/token`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Basic ${devPortalBasicAuth(client.clientId, client.clientSecret)}`,
+      'Content-Type': 'application/x-www-form-urlencoded'
+    },
+    body: params.toString()
+  });
+
+  if (!token.access_token) {
+    throw new Error(`DevPortal token response did not include access_token: ${JSON.stringify(token)}`);
+  }
+
+  return token.access_token;
+}
+
+async function devPortalGetToken() {
+  return devPortalRegisterClient([
+    'apim:api_view',
+    'apim:subscribe',
+    'apim:app_manage',
+    'apim:sub_manage'
+  ]);
+}
+
+async function devPortalFindCatalogueApplication(token) {
+  const apps = await devPortalRequestJson(`${APIM_HOST}/api/am/devportal/v3/applications?limit=200`, {
+    headers: { Authorization: `Bearer ${token}` }
+  });
+
+  const app = (apps.list || []).find((item) => item.name === DEVPORTAL_CATALOGUE_APP_NAME);
+
+  if (!app) {
+    throw new Error(`Developer Portal application not found: ${DEVPORTAL_CATALOGUE_APP_NAME}`);
+  }
+
+  return app;
+}
+
+async function devPortalListApplicationSubscriptions(token, applicationId) {
+  const subscriptions = [];
+  let offset = 0;
+  const limit = 100;
+
+  while (true) {
+    const payload = await devPortalRequestJson(
+      `${APIM_HOST}/api/am/devportal/v3/subscriptions?applicationId=${encodeURIComponent(applicationId)}&limit=${limit}&offset=${offset}`,
+      { headers: { Authorization: `Bearer ${token}` } }
+    );
+
+    const page = payload.list || [];
+    subscriptions.push(...page);
+
+    if (page.length < limit) {
+      break;
+    }
+
+    offset += limit;
+  }
+
+  return subscriptions;
+}
+
+function devPortalSubscriptionKeys(subscription) {
+  const info = subscription.apiInfo || subscription.api || {};
+  const apiId = subscription.apiId || info.id || info.apiId;
+  const name = info.name || subscription.apiName || subscription.name;
+  const version = info.version || subscription.apiVersion || subscription.version;
+  const keys = [];
+
+  if (apiId) {
+    keys.push(String(apiId));
+  }
+
+  if (name && version) {
+    keys.push(`${name}:${version}`);
+  }
+
+  return keys;
+}
+
+function devPortalRecordKeys(record) {
+  return [
+    record?.apiId ? String(record.apiId) : null,
+    record?.name && record?.version ? `${record.name}:${record.version}` : null
+  ].filter(Boolean);
+}
+
+function devPortalFindMatchingCacheRecord(cacheRows, subscription) {
+  const keys = new Set(devPortalSubscriptionKeys(subscription));
+
+  return cacheRows.find((row) => {
+    return devPortalRecordKeys(row).some((key) => keys.has(key));
+  });
+}
+
+async function devPortalReadCachedResults() {
+  const response = await fetch('http://localhost:6300/cache/results');
+  if (!response.ok) {
+    throw new Error(`health-status-cache returned HTTP ${response.status}`);
+  }
+
+  const payload = await response.json();
+  return Array.isArray(payload) ? payload : [];
+}
+
+function devPortalPlaceholderFromSubscription(subscription) {
+  const info = subscription.apiInfo || subscription.api || {};
+  const now = new Date().toISOString();
+
+  return {
+    apiId: subscription.apiId || info.id || info.apiId || null,
+    name: info.name || subscription.apiName || subscription.name || 'unknown-api',
+    displayName: info.displayName || info.name || subscription.apiName || subscription.name || 'unknown-api',
+    version: info.version || subscription.apiVersion || subscription.version || '1.0.0',
+    context: info.context || null,
+    domain: 'Unclassified',
+    owner: {
+      team: 'Unknown',
+      email: 'unknown@example.com'
+    },
+    runtime: 'Unknown',
+    criticality: 'Unclassified',
+    slaTarget: '99.50%',
+    lifecycle: info.lifeCycleStatus || info.lifecycleStatus || 'PUBLISHED',
+    checkFrequency: 'none',
+    checkedAt: null,
+    healthUrl: null,
+    liveness: {
+      status: 'PENDING',
+      httpStatus: null,
+      latencyMs: null
+    },
+    contract: {
+      status: 'PENDING',
+      reasons: ['Subscribed in API Catalogue Application; waiting for APIM-to-MI reconciliation or health metadata.']
+    },
+    sla: {
+      status: 'PENDING',
+      target: '99.50%',
+      window: 'demo'
+    },
+    probePolicy: {
+      active: false,
+      frequency: 'none',
+      reason: 'Subscribed in Developer Portal but no MI status is available yet.'
+    },
+    consumerStatus: 'UNKNOWN',
+    reason: 'Subscribed in API Catalogue Application; waiting for MI health status.',
+    source: 'wso2-api-manager-devportal',
+    sourceOfTruth: 'wso2-api-manager',
+    subscriptionApplication: DEVPORTAL_CATALOGUE_APP_NAME,
+    subscriptionStatus: subscription.status,
+    subscriptionSyncedAt: now
+  };
+}
+
+function devPortalSubscriptionFingerprint(subscriptions) {
+  return subscriptions
+    .map((subscription) => devPortalSubscriptionKeys(subscription).sort().join('|'))
+    .sort()
+    .join('||');
+}
+
+function devPortalMaybeTriggerReconcile(subscriptions) {
+  const fingerprint = devPortalSubscriptionFingerprint(subscriptions);
+
+  if (fingerprint === devPortalLastSubscriptionFingerprint) {
+    return;
+  }
+
+  devPortalLastSubscriptionFingerprint = fingerprint;
+
+  if (devPortalReconcileInFlight) {
+    return;
+  }
+
+  devPortalReconcileInFlight = true;
+
+  const child = spawn('npm', ['run', 'platform:reconcile-once'], {
+    cwd: REPO_ROOT,
+    shell: false,
+    stdio: ['ignore', 'pipe', 'pipe']
+  });
+
+  child.stdout.on('data', (chunk) => {
+    process.stdout.write(`[devportal-catalogue-reconcile] ${chunk}`);
+  });
+
+  child.stderr.on('data', (chunk) => {
+    process.stderr.write(`[devportal-catalogue-reconcile] ${chunk}`);
+  });
+
+  child.on('close', (code) => {
+    devPortalReconcileInFlight = false;
+    console.log(`[devportal-catalogue-reconcile] finished with code ${code}`);
+  });
+}
+
+async function devPortalBuildCatalogueRows() {
+  const token = await devPortalGetToken();
+  const app = await devPortalFindCatalogueApplication(token);
+  const appId = app.applicationId || app.id;
+  const subscriptions = await devPortalListApplicationSubscriptions(token, appId);
+  const cacheRows = await devPortalReadCachedResults();
+
+  devPortalMaybeTriggerReconcile(subscriptions);
+
+  const rows = subscriptions.map((subscription) => {
+    const cached = devPortalFindMatchingCacheRecord(cacheRows, subscription);
+    const placeholder = devPortalPlaceholderFromSubscription(subscription);
+
+    return {
+      ...placeholder,
+      ...(cached || {}),
+      subscriptionApplication: DEVPORTAL_CATALOGUE_APP_NAME,
+      subscriptionStatus: subscription.status,
+      sourceOfTruth: 'wso2-api-manager-devportal'
+    };
+  });
+
+  return rows;
+}
+
+function devPortalNormalizeStatus(value) {
+  return String(value || 'UNKNOWN').toUpperCase();
+}
+
+function devPortalBuildSummary(rows) {
+  const summary = {
+    total: rows.length,
+    registered: rows.length,
+    healthy: 0,
+    attention: 0,
+    green: 0,
+    red: 0,
+    grey: 0,
+    unknown: 0,
+    consumerStatusCounts: {},
+    livenessCounts: {},
+    contractCounts: {},
+    sourceOfTruth: 'wso2-api-manager-devportal',
+    subscriptionApplication: DEVPORTAL_CATALOGUE_APP_NAME,
+    generatedAt: new Date().toISOString()
+  };
+
+  for (const row of rows) {
+    const consumerStatus = devPortalNormalizeStatus(row.consumerStatus);
+    const livenessStatus = devPortalNormalizeStatus(row.liveness && row.liveness.status);
+    const contractStatus = devPortalNormalizeStatus(row.contract && row.contract.status);
+
+    summary.consumerStatusCounts[consumerStatus] = (summary.consumerStatusCounts[consumerStatus] || 0) + 1;
+    summary.livenessCounts[livenessStatus] = (summary.livenessCounts[livenessStatus] || 0) + 1;
+    summary.contractCounts[contractStatus] = (summary.contractCounts[contractStatus] || 0) + 1;
+
+    if (consumerStatus === 'GREEN') {
+      summary.green += 1;
+      summary.healthy += 1;
+    } else if (consumerStatus === 'RED') {
+      summary.red += 1;
+      summary.attention += 1;
+    } else if (consumerStatus === 'GREY' || consumerStatus === 'GRAY') {
+      summary.grey += 1;
+    } else {
+      summary.unknown += 1;
+    }
+  }
+
+  return summary;
+}
+
+function handleDevPortalCatalogueStatusRoute(req, res) {
+  const requestUrl = new URL(req.url, 'http://localhost');
+
+  if (requestUrl.pathname === '/api/catalogue-status/apis' && req.method === 'GET') {
+    devPortalBuildCatalogueRows()
+      .then((rows) => sendJson(res, 200, rows))
+      .catch((e) => sendJson(res, 500, {
+        status: 'ERROR',
+        message: e.message,
+        source: 'platform-control-devportal-catalogue'
+      }));
+    return true;
+  }
+
+  if (requestUrl.pathname === '/api/catalogue-status/summary' && req.method === 'GET') {
+    devPortalBuildCatalogueRows()
+      .then((rows) => sendJson(res, 200, devPortalBuildSummary(rows)))
+      .catch((e) => sendJson(res, 500, {
+        status: 'ERROR',
+        message: e.message,
+        source: 'platform-control-devportal-catalogue'
+      }));
+    return true;
+  }
+
+  return false;
+}
+/* DEVPORTAL_CATALOGUE_STATUS_ROUTES_END */
+
+
+
+/* DEVPORTAL_CATALOGUE_STATUS_FINAL_PATCH_START */
+const CATALOGUE_APIM_HOST = process.env.APIM_HOST || 'https://localhost:9443';
+const CATALOGUE_APIM_USERNAME = process.env.APIM_USERNAME || 'admin';
+const CATALOGUE_APIM_PASSWORD = process.env.APIM_PASSWORD || 'admin';
+const CATALOGUE_APP_NAME = process.env.API_CATALOGUE_APP_NAME || 'API Catalogue Application';
+const CATALOGUE_CACHE_RESULTS_URL = process.env.CATALOGUE_CACHE_RESULTS_URL || 'http://localhost:6300/cache/results';
+
+if (String(process.env.APIM_ALLOW_INSECURE_TLS || 'true').toLowerCase() === 'true') {
+  process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
+}
+
+function catalogueSendJson(res, statusCode, payload) {
+  res.writeHead(statusCode, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify(payload));
+}
+
+function catalogueBasicAuth(username, password) {
+  return Buffer.from(`${username}:${password}`).toString('base64');
+}
+
+async function catalogueRequestJson(url, options = {}) {
+  const response = await fetch(url, options);
+  const text = await response.text();
+
+  let payload = {};
+  try {
+    payload = text ? JSON.parse(text) : {};
+  } catch {
+    payload = { raw: text };
+  }
+
+  if (!response.ok) {
+    throw new Error(`HTTP ${response.status} ${options.method || 'GET'} ${url}: ${text}`);
+  }
+
+  return payload;
+}
+
+async function catalogueGetDevPortalToken() {
+  const client = await catalogueRequestJson(`${CATALOGUE_APIM_HOST}/client-registration/v0.17/register`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Basic ${catalogueBasicAuth(CATALOGUE_APIM_USERNAME, CATALOGUE_APIM_PASSWORD)}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      callbackUrl: 'www.google.com',
+      clientName: `api-catalogue-ui-${Date.now()}`,
+      owner: CATALOGUE_APIM_USERNAME,
+      grantType: 'password refresh_token client_credentials',
+      saasApp: true
+    })
+  });
+
+  const tokenBody = new URLSearchParams();
+  tokenBody.set('grant_type', 'password');
+  tokenBody.set('username', CATALOGUE_APIM_USERNAME);
+  tokenBody.set('password', CATALOGUE_APIM_PASSWORD);
+  tokenBody.set('scope', 'apim:api_view apim:subscribe apim:app_manage apim:sub_manage');
+
+  const token = await catalogueRequestJson(`${CATALOGUE_APIM_HOST}/oauth2/token`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Basic ${catalogueBasicAuth(client.clientId, client.clientSecret)}`,
+      'Content-Type': 'application/x-www-form-urlencoded'
+    },
+    body: tokenBody.toString()
+  });
+
+  if (!token.access_token) {
+    throw new Error(`DevPortal token response did not include access_token: ${JSON.stringify(token)}`);
+  }
+
+  return token.access_token;
+}
+
+async function catalogueFindApplication(token) {
+  const applications = await catalogueRequestJson(`${CATALOGUE_APIM_HOST}/api/am/devportal/v3/applications?limit=200`, {
+    headers: { Authorization: `Bearer ${token}` }
+  });
+
+  const app = (applications.list || []).find((item) => item.name === CATALOGUE_APP_NAME);
+
+  if (!app) {
+    throw new Error(`Developer Portal application not found: ${CATALOGUE_APP_NAME}`);
+  }
+
+  return app;
+}
+
+async function catalogueListApplicationSubscriptions(token, applicationId) {
+  const subscriptions = [];
+  let offset = 0;
+  const limit = 100;
+
+  while (true) {
+    const payload = await catalogueRequestJson(
+      `${CATALOGUE_APIM_HOST}/api/am/devportal/v3/subscriptions?applicationId=${encodeURIComponent(applicationId)}&limit=${limit}&offset=${offset}`,
+      { headers: { Authorization: `Bearer ${token}` } }
+    );
+
+    const page = payload.list || [];
+    subscriptions.push(...page);
+
+    if (page.length < limit) {
+      break;
+    }
+
+    offset += limit;
+  }
+
+  return subscriptions;
+}
+
+async function catalogueReadCachedRows() {
+  const response = await fetch(CATALOGUE_CACHE_RESULTS_URL);
+  const text = await response.text();
+
+  if (!response.ok) {
+    throw new Error(`health-status-cache returned HTTP ${response.status}: ${text}`);
+  }
+
+  const payload = text ? JSON.parse(text) : [];
+  return Array.isArray(payload) ? payload : [];
+}
+
+function catalogueSubscriptionApiInfo(subscription) {
+  return subscription.apiInfo || subscription.api || {};
+}
+
+function catalogueSubscriptionKeys(subscription) {
+  const info = catalogueSubscriptionApiInfo(subscription);
+  const keys = [];
+
+  const apiId = subscription.apiId || info.id || info.apiId;
+  const name = info.name || subscription.apiName || subscription.name;
+  const version = info.version || subscription.apiVersion || subscription.version;
+
+  if (apiId) {
+    keys.push(String(apiId));
+  }
+
+  if (name && version) {
+    keys.push(`${name}:${version}`);
+  }
+
+  return keys;
+}
+
+function catalogueRowKeys(row) {
+  return [
+    row && row.apiId ? String(row.apiId) : null,
+    row && row.name && row.version ? `${row.name}:${row.version}` : null
+  ].filter(Boolean);
+}
+
+function catalogueFindCachedRow(cacheRows, subscription) {
+  const subscriptionKeys = new Set(catalogueSubscriptionKeys(subscription));
+
+  return cacheRows.find((row) => {
+    return catalogueRowKeys(row).some((key) => subscriptionKeys.has(key));
+  });
+}
+
+function cataloguePlaceholderRow(subscription) {
+  const info = catalogueSubscriptionApiInfo(subscription);
+  const now = new Date().toISOString();
+
+  return {
+    apiId: subscription.apiId || info.id || info.apiId || null,
+    name: info.name || subscription.apiName || subscription.name || 'unknown-api',
+    version: info.version || subscription.apiVersion || subscription.version || '1.0.0',
+    context: info.context || null,
+    domain: 'Unclassified',
+    owner: {
+      team: 'Unknown',
+      email: 'unknown@example.com'
+    },
+    runtime: 'Unknown',
+    criticality: 'Unclassified',
+    slaTarget: '99.50%',
+    lifecycle: info.lifeCycleStatus || info.lifecycleStatus || 'PUBLISHED',
+    checkFrequency: 'none',
+    checkedAt: null,
+    healthUrl: null,
+    liveness: {
+      status: 'PENDING',
+      httpStatus: null,
+      latencyMs: null
+    },
+    contract: {
+      status: 'PENDING',
+      reasons: ['Subscribed in API Catalogue Application; waiting for MI health status.']
+    },
+    sla: {
+      status: 'PENDING',
+      target: '99.50%',
+      window: 'demo'
+    },
+    probePolicy: {
+      active: false,
+      frequency: 'none',
+      reason: 'Subscribed in Developer Portal but no MI status is available yet.'
+    },
+    consumerStatus: 'UNKNOWN',
+    reason: 'Subscribed in API Catalogue Application; waiting for MI health status.',
+    source: 'wso2-api-manager-devportal',
+    sourceOfTruth: 'wso2-api-manager-devportal',
+    subscriptionApplication: CATALOGUE_APP_NAME,
+    subscriptionStatus: subscription.status,
+    subscriptionSyncedAt: now
+  };
+}
+
+async function catalogueBuildSubscribedRows() {
+  const token = await catalogueGetDevPortalToken();
+  const app = await catalogueFindApplication(token);
+  const applicationId = app.applicationId || app.id;
+  const subscriptions = await catalogueListApplicationSubscriptions(token, applicationId);
+  const cacheRows = await catalogueReadCachedRows();
+
+  return subscriptions.map((subscription) => {
+    const placeholder = cataloguePlaceholderRow(subscription);
+    const cached = catalogueFindCachedRow(cacheRows, subscription);
+
+    return {
+      ...placeholder,
+      ...(cached || {}),
+      sourceOfTruth: 'wso2-api-manager-devportal',
+      subscriptionApplication: CATALOGUE_APP_NAME,
+      subscriptionStatus: subscription.status
+    };
+  });
+}
+
+function catalogueNormalizeStatus(value) {
+  return String(value || 'UNKNOWN').toUpperCase();
+}
+
+function catalogueBuildSummary(rows) {
+  const summary = {
+    total: rows.length,
+    registered: rows.length,
+    healthy: 0,
+    attention: 0,
+    green: 0,
+    red: 0,
+    grey: 0,
+    unknown: 0,
+    consumerStatusCounts: {},
+    livenessCounts: {},
+    contractCounts: {},
+    sourceOfTruth: 'wso2-api-manager-devportal',
+    subscriptionApplication: CATALOGUE_APP_NAME,
+    generatedAt: new Date().toISOString()
+  };
+
+  for (const row of rows) {
+    const consumerStatus = catalogueNormalizeStatus(row.consumerStatus);
+    const livenessStatus = catalogueNormalizeStatus(row.liveness && row.liveness.status);
+    const contractStatus = catalogueNormalizeStatus(row.contract && row.contract.status);
+
+    summary.consumerStatusCounts[consumerStatus] = (summary.consumerStatusCounts[consumerStatus] || 0) + 1;
+    summary.livenessCounts[livenessStatus] = (summary.livenessCounts[livenessStatus] || 0) + 1;
+    summary.contractCounts[contractStatus] = (summary.contractCounts[contractStatus] || 0) + 1;
+
+    if (consumerStatus === 'GREEN') {
+      summary.green += 1;
+      summary.healthy += 1;
+    } else if (consumerStatus === 'RED') {
+      summary.red += 1;
+      summary.attention += 1;
+    } else if (consumerStatus === 'GREY' || consumerStatus === 'GRAY') {
+      summary.grey += 1;
+    } else {
+      summary.unknown += 1;
+    }
+  }
+
+  return summary;
+}
+
+async function handleCatalogueSubscribedStatusRoute(req, res) {
+  const requestUrl = new URL(req.url, 'http://localhost');
+
+  if (requestUrl.pathname === '/api/catalogue-status/apis' && req.method === 'GET') {
+    try {
+      const rows = await catalogueBuildSubscribedRows();
+      catalogueSendJson(res, 200, rows);
+    } catch (e) {
+      catalogueSendJson(res, 500, {
+        status: 'ERROR',
+        message: e.message,
+        source: 'platform-control-devportal-catalogue'
+      });
+    }
+    return true;
+  }
+
+  if (requestUrl.pathname === '/api/catalogue-status/summary' && req.method === 'GET') {
+    try {
+      const rows = await catalogueBuildSubscribedRows();
+      catalogueSendJson(res, 200, catalogueBuildSummary(rows));
+    } catch (e) {
+      catalogueSendJson(res, 500, {
+        status: 'ERROR',
+        message: e.message,
+        source: 'platform-control-devportal-catalogue'
+      });
+    }
+    return true;
+  }
+
+  return false;
+}
+/* DEVPORTAL_CATALOGUE_STATUS_FINAL_PATCH_END */
+
+
+
+/* DEVPORTAL_CATALOGUE_V2_START */
+const DP2_APIM_HOST = process.env.APIM_HOST || 'https://localhost:9443';
+const DP2_APIM_USERNAME = process.env.APIM_USERNAME || 'admin';
+const DP2_APIM_PASSWORD = process.env.APIM_PASSWORD || 'admin';
+const DP2_APP_NAME = process.env.API_CATALOGUE_APP_NAME || 'API Catalogue Application';
+const DP2_CACHE_RESULTS_URL = process.env.CATALOGUE_CACHE_RESULTS_URL || 'http://localhost:6300/cache/results';
+
+
+let dp2CachedOAuthClient = null;
+let dp2CachedAccessToken = null;
+let dp2CachedAccessTokenExpiresAt = 0;
+let dp2LastSuccessfulCatalogueRows = null;
+
+if (String(process.env.APIM_ALLOW_INSECURE_TLS || 'true').toLowerCase() === 'true') {
+  process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
+}
+
+function dp2SendJson(res, statusCode, payload) {
+  res.writeHead(statusCode, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify(payload));
+}
+
+function dp2BasicAuth(username, password) {
+  return Buffer.from(`${username}:${password}`).toString('base64');
+}
+
+async function dp2RequestJson(url, options = {}) {
+  const response = await fetch(url, options);
+  const text = await response.text();
+
+  let payload = {};
+  try {
+    payload = text ? JSON.parse(text) : {};
+  } catch {
+    payload = { raw: text };
+  }
+
+  if (!response.ok) {
+    throw new Error(`HTTP ${response.status} ${options.method || 'GET'} ${url}: ${text}`);
+  }
+
+  return payload;
+}
+
+async function dp2GetDevPortalToken() {
+  const now = Date.now();
+
+  if (dp2CachedAccessToken && now < dp2CachedAccessTokenExpiresAt - 30000) {
+    return dp2CachedAccessToken;
+  }
+
+  if (!dp2CachedOAuthClient) {
+    dp2CachedOAuthClient = await dp2RequestJson(`${DP2_APIM_HOST}/client-registration/v0.17/register`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Basic ${dp2BasicAuth(DP2_APIM_USERNAME, DP2_APIM_PASSWORD)}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        callbackUrl: 'www.google.com',
+        clientName: 'api-catalogue-ui-devportal-client',
+        owner: DP2_APIM_USERNAME,
+        grantType: 'password refresh_token client_credentials',
+        saasApp: true
+      })
+    });
+  }
+
+  const tokenBody = new URLSearchParams();
+  tokenBody.set('grant_type', 'password');
+  tokenBody.set('username', DP2_APIM_USERNAME);
+  tokenBody.set('password', DP2_APIM_PASSWORD);
+  tokenBody.set('scope', 'apim:api_view apim:subscribe apim:app_manage apim:sub_manage');
+
+  const token = await dp2RequestJson(`${DP2_APIM_HOST}/oauth2/token`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Basic ${dp2BasicAuth(dp2CachedOAuthClient.clientId, dp2CachedOAuthClient.clientSecret)}`,
+      'Content-Type': 'application/x-www-form-urlencoded'
+    },
+    body: tokenBody.toString()
+  });
+
+  if (!token.access_token) {
+    throw new Error(`DevPortal token response did not include access_token: ${JSON.stringify(token)}`);
+  }
+
+  dp2CachedAccessToken = token.access_token;
+  dp2CachedAccessTokenExpiresAt = Date.now() + Number(token.expires_in || 3600) * 1000;
+
+  return dp2CachedAccessToken;
+}
+
+async function dp2FindCatalogueApplication(token) {
+  const apps = await dp2RequestJson(`${DP2_APIM_HOST}/api/am/devportal/v3/applications?limit=200`, {
+    headers: { Authorization: `Bearer ${token}` }
+  });
+
+  const app = (apps.list || []).find((item) => item.name === DP2_APP_NAME);
+
+  if (!app) {
+    throw new Error(`Developer Portal application not found: ${DP2_APP_NAME}`);
+  }
+
+  return app;
+}
+
+async function dp2ListApplicationSubscriptions(token, applicationId) {
+  const subscriptions = [];
+  let offset = 0;
+  const limit = 100;
+
+  while (true) {
+    const payload = await dp2RequestJson(
+      `${DP2_APIM_HOST}/api/am/devportal/v3/subscriptions?applicationId=${encodeURIComponent(applicationId)}&limit=${limit}&offset=${offset}`,
+      { headers: { Authorization: `Bearer ${token}` } }
+    );
+
+    const page = payload.list || [];
+    subscriptions.push(...page);
+
+    if (page.length < limit) {
+      break;
+    }
+
+    offset += limit;
+  }
+
+  return subscriptions;
+}
+
+async function dp2ReadCachedRows() {
+  const response = await fetch(DP2_CACHE_RESULTS_URL);
+  const text = await response.text();
+
+  if (!response.ok) {
+    throw new Error(`health-status-cache returned HTTP ${response.status}: ${text}`);
+  }
+
+  const payload = text ? JSON.parse(text) : [];
+  return Array.isArray(payload) ? payload : [];
+}
+
+function dp2SubscriptionInfo(subscription) {
+  return subscription.apiInfo || subscription.api || {};
+}
+
+
+function dp2ApiIdFromSubscription(subscription) {
+  const info = dp2SubscriptionInfo(subscription);
+  return subscription.apiId || info.id || info.apiId || null;
+}
+
+function dp2ToPropertyMap(api) {
+  const map = {};
+
+  function put(name, value) {
+    if (!name || value === undefined || value === null || value === "") {
+      return;
+    }
+    map[String(name)] = String(value);
+  }
+
+  const collections = [
+    api?.additionalProperties,
+    api?.properties,
+    api?.additionalPropertiesMap
+  ];
+
+  for (const collection of collections) {
+    if (Array.isArray(collection)) {
+      for (const item of collection) {
+        put(item.name || item.key, item.value);
+      }
+    } else if (collection && typeof collection === 'object') {
+      for (const [key, value] of Object.entries(collection)) {
+        if (value && typeof value === 'object' && Object.prototype.hasOwnProperty.call(value, 'value')) {
+          put(key, value.value);
+        } else {
+          put(key, value);
+        }
+      }
+    }
+  }
+
+  return map;
+}
+
+async function dp2FetchPublisherApiDetails(token, subscription) {
+  const apiId = dp2ApiIdFromSubscription(subscription);
+
+  if (!apiId) {
+    return null;
+  }
+
+  try {
+    return await dp2RequestJson(`${DP2_APIM_HOST}/api/am/publisher/v4/apis/${encodeURIComponent(apiId)}`, {
+      headers: { Authorization: `Bearer ${token}` }
+    });
+  } catch (e) {
+    console.warn(`[devportal-catalogue] Could not fetch Publisher API details for ${apiId}: ${e.message}`);
+    return null;
+  }
+}
+
+function dp2OwnerFromApiDetails(api, fallbackOwner = {}) {
+  const props = dp2ToPropertyMap(api);
+  const business = api?.businessInformation || {};
+
+  // UI owner should follow APIM/DevPortal first.
+  // Demo health_owner_* properties are kept as fallback metadata only.
+  const team =
+    business.technicalOwner ||
+    business.businessOwner ||
+    api?.provider ||
+    api?.createdBy ||
+    props.health_owner_team ||
+    props.owner_team ||
+    fallbackOwner.team ||
+    'Unknown';
+
+  const email =
+    business.technicalOwnerEmail ||
+    business.businessOwnerEmail ||
+    props.health_owner_email ||
+    props.owner_email ||
+    fallbackOwner.email ||
+    'unknown@example.com';
+
+  return {
+    team,
+    email
+  };
+}
+
+
+function dp2JoinUrl(base, pathValue) {
+  if (!base) {
+    return null;
+  }
+
+  const normalizedPath = pathValue || "/health";
+  return `${String(base).replace(/\/+$/, "")}/${String(normalizedPath).replace(/^\/+/, "")}`;
+}
+
+function dp2ToBrowserReachableUrl(urlValue) {
+  if (!urlValue) {
+    return null;
+  }
+
+  try {
+    const parsed = new URL(urlValue);
+
+    // Docker service DNS names such as accounts-api are valid inside containers,
+    // but not from the user's browser. Keep the port and path, expose localhost.
+    if (
+      parsed.hostname &&
+      parsed.hostname !== "localhost" &&
+      parsed.hostname !== "127.0.0.1" &&
+      !parsed.hostname.includes(".")
+    ) {
+      parsed.hostname = "localhost";
+    }
+
+    return parsed.toString();
+  } catch {
+    return urlValue;
+  }
+}
+
+function dp2BuildHealthUrlsFromApiDetails(api, fallback = {}) {
+  const props = dp2ToPropertyMap(api);
+
+  const healthPath = props.health_path || fallback.healthPath || "/health";
+  const internalBase = props.health_backend_url || props.backend_url || null;
+  const browserBase =
+    props.health_browser_base_url ||
+    props.health_public_base_url ||
+    props.health_display_base_url ||
+    props.health_gateway_url ||
+    internalBase;
+
+  const internalHealthUrl = dp2JoinUrl(internalBase, healthPath);
+  const browserHealthUrl = dp2ToBrowserReachableUrl(dp2JoinUrl(browserBase, healthPath));
+
+  return {
+    healthPath,
+    healthInternalUrl: internalHealthUrl || fallback.healthInternalUrl || fallback.healthUrl || null,
+    healthUrl: browserHealthUrl || fallback.healthUrl || null,
+    healthBrowserUrl: browserHealthUrl || fallback.healthBrowserUrl || fallback.healthUrl || null
+  };
+}
+
+
+function dp2MetadataFromApiDetails(api, fallback = {}) {
+  if (!api) {
+    return {};
+  }
+
+  const props = dp2ToPropertyMap(api);
+  const owner = dp2OwnerFromApiDetails(api, fallback.owner || {});
+  const healthUrls = dp2BuildHealthUrlsFromApiDetails(api, fallback);
+
+  return {
+    ...healthUrls,
+    apiId: api.id || fallback.apiId || null,
+    name: api.name || fallback.name,
+    displayName: api.displayName || api.name || fallback.displayName || fallback.name,
+    version: api.version || fallback.version,
+    context: api.context || fallback.context || null,
+    lifecycle: api.lifeCycleStatus || api.lifecycleStatus || api.status || fallback.lifecycle,
+    domain: props.health_domain || props.domain || fallback.domain || 'Unclassified',
+    owner,
+    runtime: props.health_runtime || props.runtime || fallback.runtime || 'Unknown',
+    criticality: props.health_criticality || props.criticality || fallback.criticality || 'Unclassified',
+    slaTarget: props.health_sla_target || props.slaTarget || fallback.slaTarget || '99.50%'
+  };
+}
+
+
+function dp2SubscriptionKeys(subscription) {
+  const info = dp2SubscriptionInfo(subscription);
+  const keys = [];
+
+  const apiId = subscription.apiId || info.id || info.apiId;
+  const name = info.name || subscription.apiName || subscription.name;
+  const version = info.version || subscription.apiVersion || subscription.version;
+
+  if (apiId) {
+    keys.push(String(apiId));
+  }
+
+  if (name && version) {
+    keys.push(`${name}:${version}`);
+  }
+
+  return keys;
+}
+
+function dp2RowKeys(row) {
+  return [
+    row?.apiId ? String(row.apiId) : null,
+    row?.name && row?.version ? `${row.name}:${row.version}` : null
+  ].filter(Boolean);
+}
+
+function dp2FindCachedRow(cacheRows, subscription) {
+  const keys = new Set(dp2SubscriptionKeys(subscription));
+  return cacheRows.find((row) => dp2RowKeys(row).some((key) => keys.has(key)));
+}
+
+function dp2PlaceholderRow(subscription) {
+  const info = dp2SubscriptionInfo(subscription);
+  const now = new Date().toISOString();
+
+  return {
+    apiId: subscription.apiId || info.id || info.apiId || null,
+    name: info.name || subscription.apiName || subscription.name || 'unknown-api',
+    version: info.version || subscription.apiVersion || subscription.version || '1.0.0',
+    context: info.context || null,
+    domain: 'Unclassified',
+    owner: {
+      team: 'Unknown',
+      email: 'unknown@example.com'
+    },
+    runtime: 'Unknown',
+    criticality: 'Unclassified',
+    slaTarget: '99.50%',
+    lifecycle: info.lifeCycleStatus || info.lifecycleStatus || 'PUBLISHED',
+    checkFrequency: 'none',
+    checkedAt: null,
+    healthUrl: null,
+    liveness: {
+      status: 'PENDING',
+      httpStatus: null,
+      latencyMs: null
+    },
+    contract: {
+      status: 'PENDING',
+      reasons: ['Subscribed in API Catalogue Application; waiting for MI health status.']
+    },
+    sla: {
+      status: 'PENDING',
+      target: '99.50%',
+      window: 'demo'
+    },
+    probePolicy: {
+      active: false,
+      frequency: 'none',
+      reason: 'Subscribed in Developer Portal but no MI status is available yet.'
+    },
+    consumerStatus: 'UNKNOWN',
+    reason: 'Subscribed in API Catalogue Application; waiting for MI health status.',
+    source: 'wso2-api-manager-devportal',
+    sourceOfTruth: 'wso2-api-manager-devportal',
+    subscriptionApplication: DP2_APP_NAME,
+    subscriptionStatus: subscription.status,
+    subscriptionSyncedAt: now
+  };
+}
+
+async function dp2BuildCatalogueRows() {
+  const token = await dp2GetDevPortalToken();
+  const app = await dp2FindCatalogueApplication(token);
+  const applicationId = app.applicationId || app.id;
+  const subscriptions = await dp2ListApplicationSubscriptions(token, applicationId);
+  const cacheRows = await dp2ReadCachedRows();
+
+  const apiDetailsBySubscription = await Promise.all(
+    subscriptions.map((subscription) => dp2FetchPublisherApiDetails(token, subscription))
+  );
+
+  return subscriptions.map((subscription, index) => {
+    const placeholder = dp2PlaceholderRow(subscription);
+    const cached = dp2FindCachedRow(cacheRows, subscription);
+    const publisherMetadata = dp2MetadataFromApiDetails(apiDetailsBySubscription[index], {
+      ...placeholder,
+      ...(cached || {})
+    });
+
+    return {
+      ...placeholder,
+      ...(cached || {}),
+      ...publisherMetadata,
+      sourceOfTruth: 'wso2-api-manager-devportal',
+      metadataSource: publisherMetadata.owner ? 'wso2-api-manager-publisher' : 'health-status-cache',
+      subscriptionApplication: DP2_APP_NAME,
+      subscriptionStatus: subscription.status
+    };
+  });
+}
+
+function dp2NormalizeStatus(value) {
+  return String(value || 'UNKNOWN').toUpperCase();
+}
+
+function dp2BuildSummary(rows) {
+  const summary = {
+    total: rows.length,
+    registered: rows.length,
+    healthy: 0,
+    attention: 0,
+    green: 0,
+    red: 0,
+    grey: 0,
+    unknown: 0,
+    consumerStatusCounts: {},
+    livenessCounts: {},
+    contractCounts: {},
+    sourceOfTruth: 'wso2-api-manager-devportal',
+    subscriptionApplication: DP2_APP_NAME,
+    generatedAt: new Date().toISOString()
+  };
+
+  for (const row of rows) {
+    const consumerStatus = dp2NormalizeStatus(row.consumerStatus);
+    const livenessStatus = dp2NormalizeStatus(row.liveness?.status);
+    const contractStatus = dp2NormalizeStatus(row.contract?.status);
+
+    summary.consumerStatusCounts[consumerStatus] = (summary.consumerStatusCounts[consumerStatus] || 0) + 1;
+    summary.livenessCounts[livenessStatus] = (summary.livenessCounts[livenessStatus] || 0) + 1;
+    summary.contractCounts[contractStatus] = (summary.contractCounts[contractStatus] || 0) + 1;
+
+    if (consumerStatus === 'GREEN') {
+      summary.green += 1;
+      summary.healthy += 1;
+    } else if (consumerStatus === 'RED') {
+      summary.red += 1;
+      summary.attention += 1;
+    } else if (consumerStatus === 'GREY' || consumerStatus === 'GRAY') {
+      summary.grey += 1;
+    } else {
+      summary.unknown += 1;
+    }
+  }
+
+  return summary;
+}
+
+
+
+
+
+
+
+
+function dp2IsFreshApimBootstrapError(error) {
+  const message = String(error?.message || error || "");
+
+  return (
+    message.includes("Dynamic Client Registration Service not available") ||
+    message.includes("OAuth app 'api-catalogue-ui-devportal-client' creation or updating failed") ||
+    message.includes("Developer Portal application not found") ||
+    message.includes("API Catalogue Application") ||
+    message.includes("Unauthenticated request") ||
+    message.includes("/client-registration/v0.17/register") ||
+    message.includes("/api/am/devportal/v3/applications") ||
+    message.includes("HTTP 401") ||
+    message.includes("HTTP 500 POST")
+  );
+}
+
+function dp2EmptyCatalogueResponse(req, warning) {
+  if (String(req.url || "").includes("/summary")) {
+    return {
+      status: "OK",
+      source: "platform-control-devportal-catalogue",
+      warning,
+      total: 0,
+      green: 0,
+      red: 0,
+      yellow: 0,
+      grey: 0,
+      unknown: 0,
+      apis: []
+    };
+  }
+
+  return [];
+}
+
+
+
+/* APIM_GATEWAY_SECURE_INVOKE_START */
+const APIM_GATEWAY_INTERNAL_HTTP_BASE_URL =
+  process.env.PLATFORM_CONTROL_APIM_GATEWAY_BASE_URL || 'https://localhost:8243';
+
+const APIM_GATEWAY_BROWSER_HTTP_BASE_URL =
+  process.env.PLATFORM_CONTROL_APIM_GATEWAY_BROWSER_BASE_URL || 'https://localhost:8243';
+
+const APIM_GATEWAY_TOKEN_CACHE_FILE =
+  process.env.API_CATALOGUE_GATEWAY_TOKEN_FILE || '.runtime/api-catalogue-gateway-token.json';
+
+function gatewayPublishedPathForApi(api, target = 'health') {
+  const context = String(api?.context || '').replace(/\/+$/, '');
+  const version = String(api?.version || '').replace(/^\/+|\/+$/g, '');
+
+  if (!context || !version) {
+    return null;
+  }
+
+  if (target === 'health') {
+    return `${context}/${version}/health`;
+  }
+
+  return `${context}/${version}`;
+}
+
+function withApimGatewayHealthUrls(api) {
+  const path = gatewayPublishedPathForApi(api, 'health');
+
+  if (!path) {
+    return api;
+  }
+
+  const internalUrl = `${APIM_GATEWAY_INTERNAL_HTTP_BASE_URL.replace(/\/+$/, '')}${path}`;
+  const browserUrl = `${APIM_GATEWAY_BROWSER_HTTP_BASE_URL.replace(/\/+$/, '')}${path}`;
+
+  return {
+    ...api,
+
+    // Keep explicit APIM Gateway fields for the UI side panel.
+    gatewayHealthInternalUrl: internalUrl,
+    gatewayHealthBrowserUrl: browserUrl,
+
+    // The side panel should show the APIM-published URL, not the raw backend URL.
+    healthUrl: browserUrl,
+    healthInternalUrl: internalUrl,
+    healthBrowserUrl: browserUrl,
+
+    // Browser click goes through platform-control because browser links cannot add OAuth headers.
+    secureHealthInvokeUrl:
+      `http://localhost:6400/api/gateway/invoke?apiName=${encodeURIComponent(api.name)}&target=health`
+  };
+}
+
+function readGatewayTokenFromCache() {
+  const fsLocal = require('fs');
+
+  if (!fsLocal.existsSync(APIM_GATEWAY_TOKEN_CACHE_FILE)) {
+    throw new Error(
+      `Gateway token cache not found: ${APIM_GATEWAY_TOKEN_CACHE_FILE}. Run post-onboard/reconcile first.`
+    );
+  }
+
+  const cache = JSON.parse(fsLocal.readFileSync(APIM_GATEWAY_TOKEN_CACHE_FILE, 'utf8'));
+  const token = cache.accessToken || cache.access_token;
+
+  if (!token || String(token).length < 40) {
+    throw new Error(`Gateway token cache does not contain a usable access token.`);
+  }
+
+  return token;
+}
+
+async function getCatalogueRowsForGatewayInvoke() {
+  const response = await fetch('http://localhost:6300/cache/results');
+  const text = await response.text();
+
+  if (!response.ok) {
+    throw new Error(`Could not read health-status-cache results: HTTP ${response.status}: ${text}`);
+  }
+
+  const rows = text ? JSON.parse(text) : [];
+  return Array.isArray(rows) ? rows : [];
+}
+
+async function handleGatewayInvokeRoute(req, res) {
+  const requestUrl = new URL(req.url, 'http://localhost');
+
+  if (requestUrl.pathname !== '/api/gateway/invoke' || req.method !== 'GET') {
+    return false;
+  }
+
+  try {
+    const apiName = requestUrl.searchParams.get('apiName');
+    const target = requestUrl.searchParams.get('target') || 'health';
+
+    if (!apiName) {
+      throw new Error('Missing apiName query parameter.');
+    }
+
+    const rows = await getCatalogueRowsForGatewayInvoke();
+    const api = rows.find((row) => row.name === apiName);
+
+    if (!api) {
+      throw new Error(`API not found in current catalogue cache: ${apiName}`);
+    }
+
+    const path = gatewayPublishedPathForApi(api, target);
+
+    if (!path) {
+      throw new Error(`Could not build APIM Gateway path for ${apiName}. Missing context/version.`);
+    }
+
+    const gatewayUrl = `${APIM_GATEWAY_INTERNAL_HTTP_BASE_URL.replace(/\/+$/, '')}${path}`;
+    const token = readGatewayTokenFromCache();
+
+    const gatewayResponse = await fetch(gatewayUrl, {
+      method: 'GET',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: 'application/json'
+      }
+    });
+
+    const body = await gatewayResponse.text();
+    const contentType = gatewayResponse.headers.get('content-type') || 'application/json; charset=utf-8';
+
+    res.writeHead(gatewayResponse.status, {
+      'Content-Type': contentType,
+      'X-Invoked-Through': 'platform-control-apim-gateway-proxy',
+      'X-APIM-Gateway-URL': gatewayUrl.replace('wso2-apim', 'localhost').replace(':8280', ':8280')
+    });
+    res.end(body);
+  } catch (e) {
+    res.writeHead(500, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({
+      status: 'ERROR',
+      message: e.message,
+      source: 'platform-control-apim-gateway-proxy'
+    }));
+  }
+
+  return true;
+}
+/* APIM_GATEWAY_SECURE_INVOKE_END */
+
+
+async function dp2HandleCatalogueStatusRoute(req, res) {
+  const requestUrl = new URL(req.url, 'http://localhost');
+
+  if (requestUrl.pathname === '/api/catalogue-status/apis' && req.method === 'GET') {
+    try {
+      const rows = (await dp2BuildCatalogueRows()).map(withApimGatewayHealthUrls);
+      dp2LastSuccessfulCatalogueRows = rows;
+      dp2SendJson(res, 200, rows);
+    } catch (e) {
+      if (dp2IsFreshApimBootstrapError(e)) {
+        const warning = `No APIs have been manually onboarded yet, or APIM/DevPortal is still warming up: ${e.message}`;
+        console.warn(`[platform-control-devportal-catalogue] ${warning}`);
+
+        // After a fresh APIM reset, never show stale rows from a previous APIM database.
+        dp2LastSuccessfulCatalogueRows = null;
+
+        dp2SendJson(res, 200, dp2EmptyCatalogueResponse(req, warning));
+        return true;
+      }
+
+      if (dp2LastSuccessfulCatalogueRows) {
+        dp2SendJson(res, 200, dp2LastSuccessfulCatalogueRows.map((row) => ({
+          ...row,
+          catalogueWarning: e.message
+        })));
+      } else {
+        dp2SendJson(res, 500, {
+          status: 'ERROR',
+          message: e.message,
+          source: 'platform-control-devportal-catalogue'
+        });
+      }
+    }
+    return true;
+  }
+
+  if (requestUrl.pathname === '/api/catalogue-status/summary' && req.method === 'GET') {
+    try {
+      const rows = (await dp2BuildCatalogueRows()).map(withApimGatewayHealthUrls);
+      dp2SendJson(res, 200, dp2BuildSummary(rows));
+    } catch (e) {
+      if (dp2IsFreshApimBootstrapError(e)) {
+        const warning = `No APIs have been manually onboarded yet, or APIM/DevPortal is still warming up: ${e.message}`;
+        console.warn(`[platform-control-devportal-catalogue] ${warning}`);
+
+        dp2LastSuccessfulCatalogueRows = null;
+
+        dp2SendJson(res, 200, dp2EmptyCatalogueResponse(req, warning));
+        return true;
+      }
+
+      dp2SendJson(res, 500, {
+        status: 'ERROR',
+        message: e.message,
+        source: 'platform-control-devportal-catalogue'
+      });
+    }
+    return true;
+  }
+
+  return false;
+}
+/* DEVPORTAL_CATALOGUE_V2_END */
+
+
+
+/* CATALOGUE_SYNC_RUN_ROUTE_START */
+
+let catalogueSyncJobState = {
+  status: 'IDLE',
+  message: 'No catalogue sync has been started yet.',
+  startedAt: null,
+  finishedAt: null,
+  result: null,
+  error: null
+};
+
+function catalogueSyncSendJson(res, statusCode, payload) {
+  res.writeHead(statusCode, {
+    'Content-Type': 'application/json',
+    'Access-Control-Allow-Origin': '*',
+    'Access-Control-Allow-Headers': 'Content-Type',
+    'Access-Control-Allow-Methods': 'GET,POST,OPTIONS'
+  });
+  res.end(JSON.stringify(payload, null, 2));
+}
+
+function catalogueSyncRun(command, args, timeoutMs = 300000) {
+  return new Promise((resolve) => {
+    const startedAt = new Date().toISOString();
+    const child = spawn(command, args, {
+      cwd: REPO_ROOT,
+      shell: false,
+      stdio: ['ignore', 'pipe', 'pipe']
+    });
+
+    let stdout = '';
+    let stderr = '';
+    let timedOut = false;
+
+    const timer = setTimeout(() => {
+      timedOut = true;
+      child.kill('SIGTERM');
+    }, timeoutMs);
+
+    child.stdout.on('data', (chunk) => {
+      stdout += chunk.toString();
+    });
+
+    child.stderr.on('data', (chunk) => {
+      stderr += chunk.toString();
+    });
+
+    child.on('close', (code, signal) => {
+      clearTimeout(timer);
+      resolve({
+        command,
+        args,
+        code,
+        signal,
+        timedOut,
+        startedAt,
+        finishedAt: new Date().toISOString(),
+        stdout,
+        stderr
+      });
+    });
+  });
+}
+
+async function catalogueSyncSleep(ms) {
+  await new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function catalogueSyncWaitForMi(timeoutMs = 180000, intervalMs = 5000) {
+  const deadline = Date.now() + timeoutMs;
+  let lastError = null;
+
+  while (Date.now() < deadline) {
+    try {
+      const response = await fetch('http://localhost:8290/health-registry/v1/apis');
+
+      if (response.ok) {
+        return {
+          status: 'OK',
+          httpStatus: response.status,
+          message: 'MI health registry is reachable'
+        };
+      }
+
+      lastError = `HTTP ${response.status}`;
+    } catch (e) {
+      lastError = e.message;
+    }
+
+    await catalogueSyncSleep(intervalMs);
+  }
+
+  return {
+    status: 'TIMEOUT',
+    message: `MI health registry did not become reachable within ${Math.round(timeoutMs / 1000)}s`,
+    lastError
+  };
+}
+
+async function catalogueSyncTriggerProbe() {
+  try {
+    const response = await fetch('http://localhost:8290/health-registry/v1/probes/run', {
+      method: 'POST'
+    });
+
+    const text = await response.text();
+
+    let payload = {};
+    try {
+      payload = text ? JSON.parse(text) : {};
+    } catch {
+      payload = { raw: text };
+    }
+
+    return {
+      status: response.ok ? 'OK' : 'ERROR',
+      httpStatus: response.status,
+      payload
+    };
+  } catch (e) {
+    return {
+      status: 'ERROR',
+      message: e.message
+    };
+  }
+}
+
+function catalogueSyncRun(command, args, timeoutMs = 300000) {
+  return new Promise((resolve) => {
+    const startedAt = new Date().toISOString();
+    const displayCommand = `${command} ${args.join(' ')}`;
+
+    console.log(`[catalogue-sync] running: ${displayCommand}`);
+
+    const child = spawn(command, args, {
+      cwd: REPO_ROOT,
+      shell: true,
+      stdio: ['ignore', 'pipe', 'pipe']
+    });
+
+    let stdout = '';
+    let stderr = '';
+    let timedOut = false;
+    let resolved = false;
+
+    function finish(payload) {
+      if (resolved) {
+        return;
+      }
+
+      resolved = true;
+      clearTimeout(timer);
+      resolve(payload);
+    }
+
+    const timer = setTimeout(() => {
+      timedOut = true;
+      child.kill('SIGTERM');
+    }, timeoutMs);
+
+    child.stdout.on('data', (chunk) => {
+      const text = chunk.toString();
+      stdout += text;
+      process.stdout.write(`[catalogue-sync] ${text}`);
+    });
+
+    child.stderr.on('data', (chunk) => {
+      const text = chunk.toString();
+      stderr += text;
+      process.stderr.write(`[catalogue-sync] ${text}`);
+    });
+
+    child.on('error', (error) => {
+      finish({
+        command,
+        args,
+        displayCommand,
+        code: 127,
+        signal: null,
+        timedOut,
+        startedAt,
+        finishedAt: new Date().toISOString(),
+        stdout,
+        stderr,
+        error: error.message
+      });
+    });
+
+    child.on('close', (code, signal) => {
+      finish({
+        command,
+        args,
+        displayCommand,
+        code,
+        signal,
+        timedOut,
+        startedAt,
+        finishedAt: new Date().toISOString(),
+        stdout,
+        stderr
+      });
+    });
+  });
+}
+
+async function handleCatalogueSyncRunRoute(req, res) {
+  const requestUrl = new URL(req.url, 'http://localhost');
+
+  if (requestUrl.pathname === '/api/catalogue-sync/status' && req.method === 'GET') {
+    catalogueSyncSendJson(res, 200, catalogueSyncJobState);
+    return true;
+  }
+
+  if (requestUrl.pathname === '/api/catalogue-sync/run' && req.method === 'POST') {
+    if (catalogueSyncJobState.status === 'RUNNING') {
+      catalogueSyncSendJson(res, 202, catalogueSyncJobState);
+      return true;
+    }
+
+    catalogueSyncJobState = {
+      status: 'RUNNING',
+      message: 'Synchronizing DevPortal subscriptions, regenerating MI artifacts, restarting MI, and triggering evaluation.',
+      startedAt: new Date().toISOString(),
+      finishedAt: null,
+      result: null,
+      error: null
+    };
+
+    catalogueSyncRunNow()
+      .then((result) => {
+        catalogueSyncJobState = {
+          status: result.status === 'COMPLETED' ? 'COMPLETED' : 'ERROR',
+          message: result.message || 'Catalogue sync finished.',
+          startedAt: catalogueSyncJobState.startedAt,
+          finishedAt: new Date().toISOString(),
+          result,
+          error: result.status === 'COMPLETED' ? null : result.message
+        };
+      })
+      .catch((error) => {
+        catalogueSyncJobState = {
+          status: 'ERROR',
+          message: error.message,
+          startedAt: catalogueSyncJobState.startedAt,
+          finishedAt: new Date().toISOString(),
+          result: null,
+          error: error.message
+        };
+      });
+
+    catalogueSyncSendJson(res, 202, catalogueSyncJobState);
+    return true;
+  }
+
+  return false;
+}
+/* CATALOGUE_SYNC_RUN_ROUTE_END */
+
+
+
+/* SAFE_CATALOGUE_SYNC_ROUTE_START */
+let safeCatalogueSyncState = {
+  status: 'IDLE',
+  message: 'No catalogue sync has been started yet.',
+  startedAt: null,
+  finishedAt: null,
+  error: null,
+  result: null
+};
+
+function safeCatalogueSyncJson(res, statusCode, payload) {
+  if (!res.headersSent) {
+    res.writeHead(statusCode, {
+      'Content-Type': 'application/json',
+      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Headers': 'Content-Type',
+      'Access-Control-Allow-Methods': 'GET,POST,OPTIONS'
+    });
+  }
+
+  res.end(JSON.stringify(payload, null, 2));
+}
+
+function safeCatalogueSyncExec(command, timeoutMs = 300000) {
+  return new Promise((resolve) => {
+    const startedAt = new Date().toISOString();
+
+    console.log(`[catalogue-sync-safe] running: ${command}`);
+
+    const child = spawn(command, {
+      cwd: REPO_ROOT,
+      shell: true,
+      stdio: ['ignore', 'pipe', 'pipe']
+    });
+
+    let stdout = '';
+    let stderr = '';
+    let resolved = false;
+    let timedOut = false;
+
+    function finish(payload) {
+      if (resolved) return;
+      resolved = true;
+      clearTimeout(timer);
+      resolve(payload);
+    }
+
+    const timer = setTimeout(() => {
+      timedOut = true;
+      child.kill('SIGTERM');
+    }, timeoutMs);
+
+    child.stdout.on('data', (chunk) => {
+      const text = chunk.toString();
+      stdout += text;
+      process.stdout.write(`[catalogue-sync-safe] ${text}`);
+    });
+
+    child.stderr.on('data', (chunk) => {
+      const text = chunk.toString();
+      stderr += text;
+      process.stderr.write(`[catalogue-sync-safe] ${text}`);
+    });
+
+    child.on('error', (error) => {
+      finish({
+        command,
+        code: 127,
+        signal: null,
+        timedOut,
+        stdout,
+        stderr,
+        error: error.message,
+        startedAt,
+        finishedAt: new Date().toISOString()
+      });
+    });
+
+    child.on('close', (code, signal) => {
+      finish({
+        command,
+        code,
+        signal,
+        timedOut,
+        stdout,
+        stderr,
+        startedAt,
+        finishedAt: new Date().toISOString()
+      });
+    });
+  });
+}
+
+async function safeCatalogueSyncSleep(ms) {
+  await new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function safeCatalogueSyncWaitForMi(timeoutMs = 180000) {
+  const deadline = Date.now() + timeoutMs;
+  let lastError = null;
+
+  while (Date.now() < deadline) {
+    try {
+      const response = await fetch('http://localhost:8290/health-registry/v1/apis');
+      if (response.ok) {
+        return {
+          status: 'OK',
+          httpStatus: response.status,
+          message: 'MI health registry is reachable'
+        };
+      }
+      lastError = `HTTP ${response.status}`;
+    } catch (e) {
+      lastError = e.message;
+    }
+
+    await safeCatalogueSyncSleep(5000);
+  }
+
+  return {
+    status: 'TIMEOUT',
+    message: 'MI health registry did not become reachable in time',
+    lastError
+  };
+}
+
+async function safeCatalogueSyncProbe() {
+  try {
+    const response = await fetch('http://localhost:8290/health-registry/v1/probes/run', {
+      method: 'POST'
+    });
+
+    const text = await response.text();
+
+    let payload = {};
+    try {
+      payload = text ? JSON.parse(text) : {};
+    } catch {
+      payload = { raw: text };
+    }
+
+    return {
+      status: response.ok ? 'OK' : 'ERROR',
+      httpStatus: response.status,
+      payload
+    };
+  } catch (e) {
+    return {
+      status: 'ERROR',
+      message: e.message
+    };
+  }
+}
+
+async function safeCatalogueSyncRunJob() {
+  const startedAt = new Date().toISOString();
+
+  const reconcile = await safeCatalogueSyncExec('npm run platform:post-onboard', 300000);
+
+  if (reconcile.code !== 0) {
+    return {
+      status: 'ERROR',
+      message: 'APIM subscription reconciliation failed',
+      startedAt,
+      finishedAt: new Date().toISOString(),
+      reconcile
+    };
+  }
+
+  const restartMi = await safeCatalogueSyncExec(
+    'docker-compose --profile platform up -d --force-recreate wso2-integrator',
+    180000
+  );
+
+  if (restartMi.code !== 0) {
+    return {
+      status: 'ERROR',
+      message: 'MI restart failed after reconciliation',
+      startedAt,
+      finishedAt: new Date().toISOString(),
+      reconcile,
+      restartMi
+    };
+  }
+
+  const miReadiness = await safeCatalogueSyncWaitForMi();
+
+  if (miReadiness.status !== 'OK') {
+    return {
+      status: 'ERROR',
+      message: 'MI did not become ready after reconciliation',
+      startedAt,
+      finishedAt: new Date().toISOString(),
+      reconcile,
+      restartMi,
+      miReadiness
+    };
+  }
+
+  const probe = await safeCatalogueSyncProbe();
+
+  return {
+    status: probe.status === 'OK' ? 'COMPLETED' : 'PROBE_FAILED',
+    message: probe.status === 'OK'
+      ? 'Subscriptions reconciled, MI restarted, and evaluation triggered'
+      : 'Subscriptions reconciled and MI restarted, but probe trigger failed',
+    startedAt,
+    finishedAt: new Date().toISOString(),
+    reconcile,
+    restartMi,
+    miReadiness,
+    probe
+  };
+}
+
+async function safeHandleCatalogueSyncRoute(req, res) {
+  const requestUrl = new URL(req.url, 'http://localhost');
+
+  if (!requestUrl.pathname.startsWith('/api/catalogue-sync')) {
+    return false;
+  }
+
+  try {
+    if (req.method === 'OPTIONS') {
+      safeCatalogueSyncJson(res, 204, {});
+      return true;
+    }
+
+    if (requestUrl.pathname === '/api/catalogue-sync/status' && req.method === 'GET') {
+      safeCatalogueSyncJson(res, 200, safeCatalogueSyncState);
+      return true;
+    }
+
+    if (requestUrl.pathname === '/api/catalogue-sync/run' && req.method === 'POST') {
+      if (safeCatalogueSyncState.status === 'RUNNING') {
+        safeCatalogueSyncJson(res, 202, safeCatalogueSyncState);
+        return true;
+      }
+
+      safeCatalogueSyncState = {
+        status: 'RUNNING',
+        message: 'Synchronizing DevPortal subscriptions, regenerating MI artifacts, restarting MI, and triggering evaluation.',
+        startedAt: new Date().toISOString(),
+        finishedAt: null,
+        error: null,
+        result: null
+      };
+
+      safeCatalogueSyncRunJob()
+        .then((result) => {
+          safeCatalogueSyncState = {
+            status: result.status === 'COMPLETED' ? 'COMPLETED' : 'ERROR',
+            message: result.message || 'Catalogue sync finished.',
+            startedAt: safeCatalogueSyncState.startedAt,
+            finishedAt: new Date().toISOString(),
+            error: result.status === 'COMPLETED' ? null : result.message,
+            result
+          };
+        })
+        .catch((error) => {
+          safeCatalogueSyncState = {
+            status: 'ERROR',
+            message: error.message,
+            startedAt: safeCatalogueSyncState.startedAt,
+            finishedAt: new Date().toISOString(),
+            error: error.message,
+            result: null
+          };
+        });
+
+      safeCatalogueSyncJson(res, 202, safeCatalogueSyncState);
+      return true;
+    }
+
+    safeCatalogueSyncJson(res, 404, {
+      status: 'ERROR',
+      message: `Unknown catalogue sync route: ${req.method} ${requestUrl.pathname}`
+    });
+    return true;
+  } catch (e) {
+    safeCatalogueSyncJson(res, 500, {
+      status: 'ERROR',
+      message: e.message,
+      source: 'safe-catalogue-sync-route'
+    });
+    return true;
+  }
+}
+/* SAFE_CATALOGUE_SYNC_ROUTE_END */
+
+
 const server = http.createServer(async (req, res) => {
+  if (await safeHandleCatalogueSyncRoute(req, res)) {
+    return;
+  }
+
+
+  if (await handleCatalogueSyncRunRoute(req, res)) {
+    return;
+  }
+
+
+  if (await handleGatewayInvokeRoute(req, res)) {
+    return;
+  }
+
+  if (await dp2HandleCatalogueStatusRoute(req, res)) {
+    return;
+  }
+
+
   if (handleContractValidationRoute(req, res)) {
     return;
   }

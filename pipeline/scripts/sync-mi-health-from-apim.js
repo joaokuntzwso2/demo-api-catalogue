@@ -14,7 +14,13 @@ if (String(process.env.APIM_ALLOW_INSECURE_TLS || "false").toLowerCase() === "tr
 
 const APIM_HOST = process.env.APIM_HOST || "https://wso2-apim:9443";
 const APIM_USERNAME = process.env.APIM_USERNAME || "admin";
-const APIM_PASSWORD = process.env.APIM_PASSWORD || "admin";
+const APIM_PASSWORD = process.env.APIM_PASSWORD || "admin"; const API_CATALOGUE_APP_NAME = process.env.API_CATALOGUE_APP_NAME || "API Catalogue Application";
+const API_CATALOGUE_RUNTIME_APP_NAME = process.env.API_CATALOGUE_RUNTIME_APP_NAME || "API Catalogue Runtime Application";
+const API_CATALOGUE_USE_GATEWAY = String(process.env.API_CATALOGUE_USE_GATEWAY || "true").toLowerCase() === "true";
+const APIM_GATEWAY_INTERNAL_BASE_URL = process.env.APIM_GATEWAY_INTERNAL_BASE_URL || "http://wso2-apim:8280";
+const APIM_GATEWAY_BROWSER_BASE_URL = process.env.APIM_GATEWAY_BROWSER_BASE_URL || "http://localhost:8280";
+const API_CATALOGUE_GATEWAY_TOKEN_FILE = process.env.API_CATALOGUE_GATEWAY_TOKEN_FILE || path.join(process.cwd(), ".runtime", "api-catalogue-gateway-token.json");
+const API_CATALOGUE_GATEWAY_TOKEN_VALIDITY_SECONDS = Number(process.env.API_CATALOGUE_GATEWAY_TOKEN_VALIDITY_SECONDS || 86400);
 
 const ARTIFACTS_ROOT =
   process.env.MI_ARTIFACTS_ROOT ||
@@ -640,12 +646,12 @@ async function registerRestClient() {
   };
 }
 
-async function getAccessToken(clientId, clientSecret) {
+async function getAccessToken(clientId, clientSecret, scopes = ["apim:api_view"]) {
   const params = new URLSearchParams();
   params.set("grant_type", "password");
   params.set("username", APIM_USERNAME);
   params.set("password", APIM_PASSWORD);
-  params.set("scope", "apim:api_view");
+  params.set("scope", scopes.join(" "));
 
   const response = await requestJson(`${APIM_HOST}/oauth2/token`, {
     method: "POST",
@@ -681,43 +687,884 @@ async function getApi(token, apiId) {
   });
 }
 
-function buildRegistryRecord(api) {
-  const p = propMap(api);
+async function listDevPortalApplications(token) {
+  const response = await requestJson(`${APIM_HOST}/api/am/devportal/v3/applications?limit=200`, {
+    headers: { Authorization: `Bearer ${token}` }
+  });
+  return response.list || [];
+}
 
-  const lifecycle = api.lifeCycleStatus || api.status || "UNKNOWN";
-  const deprecated = isDeprecatedLifecycle(lifecycle);
+async function findCatalogueApplication(token) {
+  const apps = await listDevPortalApplications(token);
+  const app = apps.find((item) => item.name === API_CATALOGUE_APP_NAME);
 
-  const enabled = String(p.health_enabled || "").toLowerCase() === "true";
+  if (!app) {
+    throw new Error(`Developer Portal application not found: ${API_CATALOGUE_APP_NAME}`);
+  }
 
-  if (!enabled && !deprecated) {
+  return app;
+}
+
+async function listApplicationSubscriptions(token, applicationId) {
+  const subscriptions = [];
+  let offset = 0;
+  const limit = 100;
+
+  while (true) {
+    const response = await requestJson(
+      `${APIM_HOST}/api/am/devportal/v3/subscriptions?applicationId=${encodeURIComponent(applicationId)}&limit=${limit}&offset=${offset}`,
+      { headers: { Authorization: `Bearer ${token}` } }
+    );
+
+    const page = response.list || [];
+    subscriptions.push(...page);
+
+    if (page.length < limit) {
+      break;
+    }
+
+    offset += limit;
+  }
+
+  return subscriptions;
+}
+
+function subscriptionIdentityKeys(subscription) {
+  const info = subscription.apiInfo || subscription.api || {};
+  const keys = [];
+
+  const apiId = subscription.apiId || info.id || info.apiId;
+  const name = info.name || subscription.apiName || subscription.name;
+  const version = info.version || subscription.apiVersion || subscription.version;
+
+  if (apiId) {
+    keys.push(String(apiId));
+  }
+
+  if (name && version) {
+    keys.push(`${name}:${version}`);
+  }
+
+  return keys;
+}
+
+function apiIdentityKeys(api) {
+  return [
+    api.id ? String(api.id) : null,
+    api.name && api.version ? `${api.name}:${api.version}` : null
+  ].filter(Boolean);
+}
+
+
+function ensureRuntimeDirectory() {
+  fs.mkdirSync(path.dirname(API_CATALOGUE_GATEWAY_TOKEN_FILE), { recursive: true });
+}
+
+function readGatewayTokenCache() {
+  if (!fs.existsSync(API_CATALOGUE_GATEWAY_TOKEN_FILE)) {
     return null;
   }
 
-  const criticalityRaw = p.health_criticality || "Tier 2";
-  const normalizedCriticality = normalizeCriticality(criticalityRaw);
+  try {
+    return JSON.parse(fs.readFileSync(API_CATALOGUE_GATEWAY_TOKEN_FILE, "utf8"));
+  } catch {
+    return null;
+  }
+}
 
-  if (!normalizedCriticality && !deprecated) {
-    throw new Error(
-      `Invalid health_criticality for API ${api.name}:${api.version}. ` +
-        `Expected Tier 0, Tier 1, Tier 2 or Tier 3. Actual value: ${criticalityRaw}`
+function writeGatewayTokenCache(payload) {
+  ensureRuntimeDirectory();
+  fs.writeFileSync(API_CATALOGUE_GATEWAY_TOKEN_FILE, JSON.stringify(payload, null, 2));
+}
+
+
+function tokenLooksUsable(value) {
+  const token = String(value || "").trim();
+
+  if (!token) {
+    return false;
+  }
+
+  const lowered = token.toLowerCase();
+
+  if (
+    lowered === "n/a" ||
+    lowered === "na" ||
+    lowered === "null" ||
+    lowered === "none" ||
+    lowered === "undefined"
+  ) {
+    return false;
+  }
+
+  // WSO2 access tokens/JWTs are never 3 characters. This prevents caching
+  // placeholder values returned by key generation responses.
+  return token.length > 40;
+}
+
+function bearerTokenStillValid(cache) {
+  const expiresAt = Date.parse(cache?.accessTokenExpiresAt || "");
+  return tokenLooksUsable(cache?.accessToken) && Number.isFinite(expiresAt) && expiresAt > Date.now() + 120000;
+}
+
+function appCredentialsAvailable(cache) {
+  return Boolean(cache?.consumerKey && cache?.consumerSecret);
+}
+
+async function devportalGetApplicationKeys(token, applicationId) {
+  const urls = [
+    `${APIM_HOST}/api/am/devportal/v3/applications/${encodeURIComponent(applicationId)}/keys/PRODUCTION`,
+    `${APIM_HOST}/api/am/devportal/v3/applications/${encodeURIComponent(applicationId)}/oauth-keys/PRODUCTION`
+  ];
+
+  for (const url of urls) {
+    try {
+      return await requestJson(url, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+    } catch (e) {
+      if (!String(e.message).includes("HTTP 404")) {
+        console.warn(`[sync-mi-health-from-apim] Could not read app keys from ${url}: ${e.message}`);
+      }
+    }
+  }
+
+  return null;
+}
+
+function normalizeApplicationKeyResponse(payload) {
+  if (!payload || typeof payload !== "object") {
+    return null;
+  }
+
+  const candidates = [
+    payload,
+    payload.keys,
+    payload.key,
+    payload.production,
+    payload.PRODUCTION,
+    payload.keyMapping,
+    payload.keyDetails,
+    payload.applicationKey,
+    payload.data
+  ].filter(Boolean);
+
+  let consumerKey = null;
+  let consumerSecret = null;
+  let accessToken = null;
+  let validity = 0;
+
+  for (const source of candidates) {
+    consumerKey =
+      consumerKey ||
+      source.consumerKey ||
+      source.consumer_key ||
+      source.clientId ||
+      source.client_id;
+
+    consumerSecret =
+      consumerSecret ||
+      source.consumerSecret ||
+      source.consumer_secret ||
+      source.clientSecret ||
+      source.client_secret;
+
+    const candidateToken =
+      source.accessToken ||
+      source.access_token ||
+      source.token ||
+      source.jwtToken ||
+      source.jwt_token;
+
+    if (!accessToken && tokenLooksUsable(candidateToken)) {
+      accessToken = candidateToken;
+    }
+
+    validity =
+      validity ||
+      Number(source.validityTime || source.validityPeriod || source.expires_in || 0);
+  }
+
+  const secretLooksMasked =
+    typeof consumerSecret === "string" &&
+    (consumerSecret.includes("*") || consumerSecret.toLowerCase() === "null");
+
+  if (!consumerKey || !consumerSecret || secretLooksMasked) {
+    return null;
+  }
+
+  const expiresAt =
+    accessToken && validity > 0
+      ? new Date(Date.now() + validity * 1000).toISOString()
+      : accessToken
+        ? new Date(Date.now() + API_CATALOGUE_GATEWAY_TOKEN_VALIDITY_SECONDS * 1000).toISOString()
+        : null;
+
+  return {
+    consumerKey,
+    consumerSecret,
+    accessToken,
+    accessTokenExpiresAt: expiresAt,
+    tokenType: "Bearer",
+    raw: payload
+  };
+}
+
+
+function extractApplicationKeyMappingId(payload) {
+  if (!payload || typeof payload !== "object") {
+    return null;
+  }
+
+  const candidates = [
+    payload,
+    payload.keys,
+    payload.key,
+    payload.production,
+    payload.PRODUCTION,
+    payload.keyMapping,
+    payload.keyDetails,
+    payload.applicationKey,
+    payload.data
+  ].filter(Boolean);
+
+  for (const source of candidates) {
+    const id =
+      source.keyMappingId ||
+      source.keyMappingID ||
+      source.keyMappingUuid ||
+      source.keyMappingUUID ||
+      source.id ||
+      source.uuid;
+
+    if (id) {
+      return id;
+    }
+  }
+
+  if (Array.isArray(payload.list)) {
+    for (const item of payload.list) {
+      const id = extractApplicationKeyMappingId(item);
+      if (id) {
+        return id;
+      }
+    }
+  }
+
+  return null;
+}
+
+async function devportalCleanUpApplicationKeys(token, applicationId, keyMappingId) {
+  if (!keyMappingId) {
+    throw new Error("Cannot clean up application keys because keyMappingId is missing.");
+  }
+
+  return requestJson(
+    `${APIM_HOST}/api/am/devportal/v3/applications/${encodeURIComponent(applicationId)}/oauth-keys/${encodeURIComponent(keyMappingId)}/clean-up`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json"
+      },
+      body: "{}"
+    }
+  );
+}
+
+async function devportalGetApplicationKeysRaw(token, applicationId) {
+  const urls = [
+    `${APIM_HOST}/api/am/devportal/v3/applications/${encodeURIComponent(applicationId)}/keys/PRODUCTION`,
+    `${APIM_HOST}/api/am/devportal/v3/applications/${encodeURIComponent(applicationId)}/oauth-keys/PRODUCTION`
+  ];
+
+  let lastError = null;
+
+  for (const url of urls) {
+    try {
+      return await requestJson(url, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+    } catch (e) {
+      lastError = e;
+    }
+  }
+
+  throw lastError || new Error("Could not read existing application keys.");
+}
+
+
+async function devportalGenerateApplicationKeys(token, applicationId) {
+  const payloads = [
+    {
+      keyType: "PRODUCTION",
+      grantTypesToBeSupported: ["client_credentials"],
+      callbackUrl: "www.google.com",
+      validityTime: API_CATALOGUE_GATEWAY_TOKEN_VALIDITY_SECONDS,
+      scopes: [],
+      additionalProperties: []
+    },
+    {
+      keyType: "PRODUCTION",
+      keyManager: "Resident Key Manager",
+      grantTypesToBeSupported: ["client_credentials"],
+      callbackUrl: "www.google.com",
+      validityTime: API_CATALOGUE_GATEWAY_TOKEN_VALIDITY_SECONDS,
+      scopes: [],
+      additionalProperties: []
+    },
+    {
+      keyType: "PRODUCTION",
+      grantTypesToBeSupported: ["client_credentials", "refresh_token"],
+      callbackUrl: "www.google.com",
+      validityTime: API_CATALOGUE_GATEWAY_TOKEN_VALIDITY_SECONDS,
+      scopes: []
+    }
+  ];
+
+  let lastError = null;
+
+  for (const body of payloads) {
+    try {
+      return await requestJson(`${APIM_HOST}/api/am/devportal/v3/applications/${encodeURIComponent(applicationId)}/generate-keys`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify(body)
+      });
+    } catch (e) {
+      lastError = e;
+    }
+  }
+
+  throw lastError || new Error("Could not generate application keys.");
+}
+
+
+async function generateCatalogueApplicationToken(devportalToken, applicationId, consumerSecret) {
+  if (!consumerSecret) {
+    throw new Error("Cannot generate application token because consumerSecret is missing.");
+  }
+
+  const payloads = [
+    {
+      consumerSecret,
+      validityPeriod: API_CATALOGUE_GATEWAY_TOKEN_VALIDITY_SECONDS,
+      scopes: []
+    },
+    {
+      consumerSecret,
+      validityTime: API_CATALOGUE_GATEWAY_TOKEN_VALIDITY_SECONDS,
+      scopes: []
+    },
+    {
+      consumerSecret,
+      validityPeriod: API_CATALOGUE_GATEWAY_TOKEN_VALIDITY_SECONDS,
+      revokeToken: null,
+      scopes: []
+    }
+  ];
+
+  let lastError = null;
+
+  for (const payload of payloads) {
+    try {
+      const token = await requestJson(
+        `${APIM_HOST}/api/am/devportal/v3/applications/${encodeURIComponent(applicationId)}/keys/PRODUCTION/generate-token`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${devportalToken}`,
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify(payload)
+        }
+      );
+
+      const accessToken =
+        token.accessToken ||
+        token.access_token ||
+        token.token ||
+        token.jwtToken ||
+        token.jwt_token;
+
+      if (!tokenLooksUsable(accessToken)) {
+        throw new Error(`generate-token response did not include a usable access token: ${JSON.stringify(token)}`);
+      }
+
+      const validity =
+        Number(token.validityTime || token.validityPeriod || token.expires_in || API_CATALOGUE_GATEWAY_TOKEN_VALIDITY_SECONDS);
+
+      return {
+        accessToken,
+        accessTokenExpiresAt: new Date(Date.now() + validity * 1000).toISOString(),
+        tokenType: token.tokenType || token.token_type || "Bearer",
+        raw: token
+      };
+    } catch (e) {
+      lastError = e;
+    }
+  }
+
+  throw new Error(`Could not generate API Catalogue Application token through DevPortal generate-token: ${lastError?.message || "unknown error"}`);
+}
+
+
+async function getApplicationAccessToken(consumerKey, consumerSecret) {
+  // Kept as a fallback only. In this demo we prefer the DevPortal generate-token
+  // endpoint because it is tied directly to the API Catalogue Application keys.
+  const params = new URLSearchParams();
+  params.set("grant_type", "client_credentials");
+
+  const token = await requestJson(`${APIM_HOST}/oauth2/token`, {
+    method: "POST",
+    headers: {
+      Authorization: `Basic ${basicAuth(consumerKey, consumerSecret)}`,
+      "Content-Type": "application/x-www-form-urlencoded"
+    },
+    body: params.toString()
+  });
+
+  if (!token.access_token) {
+    throw new Error(`Application token response did not include access_token: ${JSON.stringify(token)}`);
+  }
+
+  return {
+    accessToken: token.access_token,
+    accessTokenExpiresAt: new Date(Date.now() + Number(token.expires_in || 3600) * 1000).toISOString(),
+    tokenType: token.token_type || "Bearer"
+  };
+}
+
+
+function applicationIdOf(app) {
+  return app?.applicationId || app?.id || app?.uuid;
+}
+
+async function devportalCreateRuntimeApplication(token) {
+  const name = `${API_CATALOGUE_RUNTIME_APP_NAME} ${Date.now()}`;
+
+  return requestJson(`${APIM_HOST}/api/am/devportal/v3/applications`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      name,
+      throttlingPolicy: "Unlimited",
+      description: "Runtime application used by the API catalogue demo to invoke subscribed APIs through APIM Gateway.",
+      tokenType: "JWT",
+      groups: []
+    })
+  });
+}
+
+function subscriptionApiId(subscription) {
+  return (
+    subscription?.apiId ||
+    subscription?.apiInfo?.id ||
+    subscription?.api?.id ||
+    subscription?.apiUUID ||
+    subscription?.apiUuid ||
+    null
+  );
+}
+
+async function subscribeRuntimeApplicationToCatalogueApis(token, runtimeApplicationId, subscriptions) {
+  for (const subscription of subscriptions || []) {
+    const apiId = subscriptionApiId(subscription);
+
+    if (!apiId) {
+      console.warn(`[sync-mi-health-from-apim] Could not mirror subscription because apiId was missing: ${JSON.stringify(subscription)}`);
+      continue;
+    }
+
+    const throttlingPolicy =
+      subscription.throttlingPolicy ||
+      subscription.policy ||
+      subscription.tier ||
+      "Unlimited";
+
+    try {
+      await requestJson(`${APIM_HOST}/api/am/devportal/v3/subscriptions`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          apiId,
+          applicationId: runtimeApplicationId,
+          throttlingPolicy
+        })
+      });
+    } catch (e) {
+      const message = String(e.message || "");
+      if (!message.includes("409") && !message.includes("already")) {
+        throw e;
+      }
+    }
+  }
+}
+
+async function createRuntimeApplicationWithMirroredSubscriptions(token, subscriptions) {
+  const runtimeApp = await devportalCreateRuntimeApplication(token);
+  const runtimeApplicationId = applicationIdOf(runtimeApp);
+
+  if (!runtimeApplicationId) {
+    throw new Error(`Runtime application creation response did not include id: ${JSON.stringify(runtimeApp)}`);
+  }
+
+  await subscribeRuntimeApplicationToCatalogueApis(token, runtimeApplicationId, subscriptions);
+
+  return {
+    id: runtimeApplicationId,
+    name: runtimeApp.name || API_CATALOGUE_RUNTIME_APP_NAME
+  };
+}
+
+async function buildGatewayCredentialsForApplication(token, applicationId, applicationName) {
+  let credentials = null;
+
+  try {
+    credentials = normalizeApplicationKeyResponse(
+      await devportalGenerateApplicationKeys(token, applicationId)
+    );
+  } catch (e) {
+    const message = String(e.message || "");
+
+    if (message.includes("409") || message.includes("Key Mappings already exists")) {
+      const existing = normalizeApplicationKeyResponse(
+        await devportalGetApplicationKeys(token, applicationId)
+      );
+
+      if (existing?.accessToken) {
+        credentials = existing;
+      } else {
+        throw e;
+      }
+    } else {
+      throw e;
+    }
+  }
+
+  if (!credentials) {
+    throw new Error(`Could not obtain usable production keys for ${applicationName}.`);
+  }
+
+  let appToken = null;
+  let tokenSource = "devportal-production-keys-access-token";
+
+  if (
+    credentials.accessToken &&
+    credentials.accessTokenExpiresAt &&
+    Date.parse(credentials.accessTokenExpiresAt) > Date.now() + 120000
+  ) {
+    appToken = {
+      accessToken: credentials.accessToken,
+      accessTokenExpiresAt: credentials.accessTokenExpiresAt,
+      tokenType: credentials.tokenType || "Bearer"
+    };
+  } else {
+    tokenSource = "devportal-generate-token";
+    appToken = await generateCatalogueApplicationToken(
+      token,
+      applicationId,
+      credentials.consumerSecret
     );
   }
 
-  const tierConfig = normalizedCriticality ? TIER_CONFIG[normalizedCriticality] : null;
-  const activeProbe = enabled && !deprecated;
+  return {
+    applicationId,
+    applicationName,
+    consumerKey: credentials.consumerKey || null,
+    consumerSecret: credentials.consumerSecret || null,
+    accessToken: appToken.accessToken,
+    accessTokenExpiresAt: appToken.accessTokenExpiresAt,
+    tokenType: appToken.tokenType || "Bearer",
+    tokenSource
+  };
+}
+
+
+async function ensureCatalogueApplicationGatewayCredentials(devportalToken, applicationId, subscriptionSnapshot = null) {
+  if (!API_CATALOGUE_USE_GATEWAY) {
+    return {
+      enabled: false,
+      reason: "API_CATALOGUE_USE_GATEWAY=false"
+    };
+  }
+
+  const cached = readGatewayTokenCache();
+
+  if (bearerTokenStillValid(cached)) {
+    return {
+      enabled: true,
+      source: "runtime-cache-access-token",
+      applicationId: cached.applicationId,
+      applicationName: cached.applicationName || API_CATALOGUE_RUNTIME_APP_NAME,
+      consumerKey: cached.consumerKey || null,
+      consumerSecret: cached.consumerSecret || null,
+      accessToken: cached.accessToken,
+      accessTokenExpiresAt: cached.accessTokenExpiresAt
+    };
+  }
+
+  let credentials = null;
+
+  try {
+    credentials = await buildGatewayCredentialsForApplication(
+      devportalToken,
+      applicationId,
+      API_CATALOGUE_APP_NAME
+    );
+  } catch (e) {
+    console.warn(`[sync-mi-health-from-apim] ${API_CATALOGUE_APP_NAME} production keys are not usable: ${e.message}`);
+    console.warn(`[sync-mi-health-from-apim] Creating a dedicated runtime application and mirroring catalogue subscriptions.`);
+
+    if (!subscriptionSnapshot?.subscriptions?.length) {
+      throw e;
+    }
+
+    const runtimeApp = await createRuntimeApplicationWithMirroredSubscriptions(
+      devportalToken,
+      subscriptionSnapshot.subscriptions
+    );
+
+    credentials = await buildGatewayCredentialsForApplication(
+      devportalToken,
+      runtimeApp.id,
+      runtimeApp.name
+    );
+  }
+
+  const cachePayload = {
+    applicationId: credentials.applicationId,
+    applicationName: credentials.applicationName,
+    consumerKey: credentials.consumerKey,
+    consumerSecret: credentials.consumerSecret,
+    accessToken: credentials.accessToken,
+    accessTokenExpiresAt: credentials.accessTokenExpiresAt,
+    tokenType: credentials.tokenType || "Bearer",
+    tokenSource: credentials.tokenSource,
+    updatedAt: new Date().toISOString()
+  };
+
+  writeGatewayTokenCache(cachePayload);
+
+  return {
+    enabled: true,
+    source: credentials.tokenSource,
+    ...cachePayload
+  };
+}
+
+function joinUrl(base, pathValue) {
+  return `${String(base || "").replace(/\/+$/, "")}/${String(pathValue || "").replace(/^\/+/, "")}`;
+}
+
+function normalizeGatewayPath(api, pathValue) {
+  const context = String(api.context || "").replace(/\/+$/, "");
+  const version = String(api.version || "").replace(/^\/+|\/+$/g, "");
+  const rawPath = String(pathValue || "/health");
+  const normalizedRawPath = rawPath.startsWith("/") ? rawPath : `/${rawPath}`;
+
+  if (!context) {
+    return normalizedRawPath;
+  }
+
+  // In this local APIM 4.7 runtime, the Gateway resolves the deployed API by
+  // context + version, for example /accounts/v1/1.0.0.
+  const runtimeContext =
+    version && !context.endsWith(`/${version}`)
+      ? `${context}/${version}`
+      : context;
+
+  if (
+    normalizedRawPath === runtimeContext ||
+    normalizedRawPath.startsWith(`${runtimeContext}/`)
+  ) {
+    return normalizedRawPath;
+  }
+
+  // Contract defaults currently store public paths such as:
+  // /accounts/v1/accounts/CUST-BR-002
+  // Convert them to Gateway runtime paths:
+  // /accounts/v1/1.0.0/accounts/CUST-BR-002
+  if (normalizedRawPath === context) {
+    return runtimeContext;
+  }
+
+  if (normalizedRawPath.startsWith(`${context}/`)) {
+    return `${runtimeContext}${normalizedRawPath.slice(context.length)}`;
+  }
+
+  return `${runtimeContext}/${normalizedRawPath.replace(/^\/+/, "")}`;
+}
+
+function gatewayUrlForApiPath(api, pathValue, browser = false) {
+  const base = browser ? APIM_GATEWAY_BROWSER_BASE_URL : APIM_GATEWAY_INTERNAL_BASE_URL;
+  return joinUrl(base, normalizeGatewayPath(api, pathValue));
+}
+
+function gatewayHeaders(gatewayAuth, existingHeaders = {}) {
+  if (!gatewayAuth?.enabled || !gatewayAuth.accessToken) {
+    return existingHeaders || {};
+  }
+
+  return {
+    ...(existingHeaders || {}),
+    Authorization: `Bearer ${gatewayAuth.accessToken}`
+  };
+}
+
+async function getCatalogueApplicationSubscriptionSnapshot(token) {
+  const application = await findCatalogueApplication(token);
+  const applicationId = application.applicationId || application.id;
+
+  if (!applicationId) {
+    throw new Error(`Could not determine applicationId for ${API_CATALOGUE_APP_NAME}`);
+  }
+
+  const subscriptions = await listApplicationSubscriptions(token, applicationId);
+  const subscribedApiKeys = new Set();
+
+  for (const subscription of subscriptions) {
+    for (const key of subscriptionIdentityKeys(subscription)) {
+      subscribedApiKeys.add(key);
+    }
+  }
+
+  return {
+    application: {
+      id: applicationId,
+      name: application.name
+    },
+    subscriptions,
+    subscribedApiKeys
+  };
+}
+
+function isSubscribedToCatalogueApplication(api, snapshot) {
+  return apiIdentityKeys(api).some((key) => snapshot.subscribedApiKeys.has(key));
+}
+
+function pendingSubscribedResult(record) {
+  const now = new Date().toISOString();
+
+  return {
+    apiId: record.apiId,
+    name: record.name,
+    version: record.version,
+    context: record.context,
+    domain: record.domain,
+    owner: record.owner,
+    runtime: record.runtime,
+    criticality: record.criticality,
+    slaTarget: record.slaTarget,
+    lifecycle: record.lifecycle,
+    checkFrequency: record.probePolicy.frequency,
+    checkedAt: null,
+    healthUrl: record.healthStrategy ? (record.healthStrategy.healthBrowserUrl || record.healthStrategy.healthUrl || record.healthStrategy.url) : null,
+    healthBrowserUrl: record.healthStrategy ? record.healthStrategy.healthBrowserUrl : null,
+    healthInternalUrl: record.healthStrategy ? record.healthStrategy.healthUrl : null,
+    invocationMode: (typeof record !== "undefined" && record?.invocationMode) ? record.invocationMode : "UNKNOWN",
+    liveness: {
+      status: record.probePolicy.active ? "PENDING" : "SKIPPED",
+      httpStatus: null,
+      latencyMs: null,
+      checkedAt: null
+    },
+    contract: {
+      status: record.probePolicy.active ? "PENDING" : "SKIPPED",
+      reasons: [record.probePolicy.reason || "Waiting for MI health probe."]
+    },
+    sla: {
+      status: "PENDING",
+      target: record.slaTarget,
+      window: "demo"
+    },
+    probePolicy: record.probePolicy,
+    consumerStatus: record.probePolicy.active ? "UNKNOWN" : "UNKNOWN",
+    reason: record.probePolicy.reason || "Subscribed in API Catalogue Application; waiting for MI health status.",
+    source: "wso2-api-manager-devportal",
+    sourceOfTruth: "wso2-api-manager",
+    invocationMode: (typeof record !== "undefined" && record?.invocationMode) ? record.invocationMode : "UNKNOWN",
+    subscriptionApplication: API_CATALOGUE_APP_NAME,
+    registrySyncedAt: now
+  };
+}
+
+async function syncStatusCacheCatalogueMembership(records) {
+  const placeholders = records.map((record) => {
+    if (!record.probePolicy.active) {
+      return lifecycleControlledResult(record);
+    }
+
+    return pendingSubscribedResult(record);
+  });
+
+  try {
+    await requestJson(`${STATUS_CACHE_BASE_URL}/cache/catalogue-sync`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(placeholders)
+    });
+
+    console.log(
+      `[sync-mi-health-from-apim] synced health-status-cache catalogue membership with ${placeholders.length} subscribed APIs`
+    );
+  } catch (e) {
+    console.warn(
+      `[sync-mi-health-from-apim] could not sync cache catalogue membership: ${e.message}`
+    );
+  }
+}
+
+
+
+function ownerFromApiDetails(api, p) {
+  const business = api.businessInformation || {};
+
+  return {
+    team:
+      p.health_owner_team ||
+      p.owner_team ||
+      business.technicalOwner ||
+      business.businessOwner ||
+      api.provider ||
+      api.createdBy ||
+      "Unknown",
+    email:
+      p.health_owner_email ||
+      p.owner_email ||
+      business.technicalOwnerEmail ||
+      business.businessOwnerEmail ||
+      "unknown@example.com"
+  };
+}
+
+function buildRegistryRecord(api, gatewayAuth = null) {
+  const p = propMap(api);
+  const lifecycle = api.lifeCycleStatus || api.status || "UNKNOWN";
+  const deprecated = isDeprecatedLifecycle(lifecycle);
+  const enabled = String(p.health_enabled || "").toLowerCase() === "true";
+
+  const criticalityRaw = p.health_criticality || "Tier 2";
+  const normalizedCriticality = normalizeCriticality(criticalityRaw);
+  const tierConfig = normalizedCriticality ? TIER_CONFIG[normalizedCriticality] : TIER_CONFIG["Tier 2"];
+
+  const backendUrl = p.health_backend_url;
+  const healthPath = p.health_path || "/health";
+  const hasProbeMetadata = Boolean(enabled && backendUrl && healthPath && normalizedCriticality);
+  const activeProbe = hasProbeMetadata && !deprecated;
 
   let healthStrategy = null;
 
   if (activeProbe) {
-    const backendUrl = p.health_backend_url;
-    const healthPath = p.health_path;
-
-    if (!backendUrl || !healthPath) {
-      throw new Error(
-        `API ${api.name}:${api.version} has health_enabled=true but is missing health_backend_url or health_path`
-      );
-    }
-
     const expectedPayloadRaw = getExpectedPayloadRaw(api, p);
     let expectedPayload = {};
 
@@ -733,9 +1580,7 @@ function buildRegistryRecord(api) {
       : "";
 
     const requiredFields = String(
-      p.contract_required_fields ||
-      contractRequiredFieldsFromDefaults ||
-      "traceId,service,timestamp,data"
+      p.contract_required_fields || contractRequiredFieldsFromDefaults || "traceId,service,timestamp,data"
     )
       .split(",")
       .map((v) => v.trim())
@@ -743,50 +1588,95 @@ function buildRegistryRecord(api) {
 
     const contractRequest = getContractRequest(api, p);
     const contractPath = contractRequest.path || healthPath;
-    const healthUrl = appendQueryToUrl(
+
+    const directBackendUrl = appendQueryToUrl(
       `${String(backendUrl).replace(/\/+$/, "")}${contractPath}`,
       contractRequest.query
     );
 
+    const gatewayInternalUrl = appendQueryToUrl(
+      gatewayUrlForApiPath(api, contractPath, false),
+      contractRequest.query
+    );
+
+    const gatewayBrowserHealthUrl = gatewayUrlForApiPath(api, healthPath, true);
+    const gatewayInternalHealthUrl = gatewayUrlForApiPath(api, healthPath, false);
+
+    const useGateway = Boolean(gatewayAuth?.enabled && gatewayAuth.accessToken);
+
     healthStrategy = {
-      type: "HTTP_HEALTH_CONTRACT",
+      type: useGateway ? "APIM_GATEWAY_HEALTH_CONTRACT" : "HTTP_HEALTH_CONTRACT",
       method: contractRequest.method || p.contract_method || p.health_method || "GET",
-      url: healthUrl,
-      expectedHttpStatus: Number(contractDefaultsForValidation.expectedHttpStatus || p.contract_expected_http_status || p.health_expected_http_status || 200),
-      request: contractRequest,
-      requestHeaders: contractRequest.headers || {},
+      url: useGateway ? gatewayInternalUrl : directBackendUrl,
+      expectedHttpStatus: Number(
+        contractDefaultsForValidation.expectedHttpStatus ||
+          p.contract_expected_http_status ||
+          p.health_expected_http_status ||
+          200
+      ),
+      request: {
+        ...contractRequest,
+        path: normalizeGatewayPath(api, contractPath)
+      },
+      requestHeaders: gatewayHeaders(gatewayAuth, contractRequest.headers || {}),
       requestBody: Object.prototype.hasOwnProperty.call(contractRequest, "body") ? contractRequest.body : null,
       expectedPayload,
       requiredFields,
-      timeoutMs: Number(p.health_timeout_ms || 3000)
+      timeoutMs: Number(p.health_timeout_ms || 3000),
+      invocationMode: useGateway ? "APIM_GATEWAY" : "DIRECT_BACKEND",
+      gateway: useGateway
+        ? {
+            application: gatewayAuth.applicationName || API_CATALOGUE_APP_NAME,
+            baseUrl: APIM_GATEWAY_INTERNAL_BASE_URL,
+            browserBaseUrl: APIM_GATEWAY_BROWSER_BASE_URL,
+            tokenExpiresAt: gatewayAuth.accessTokenExpiresAt,
+            validatesSubscription: true
+          }
+        : null,
+      directBackendUrl,
+      healthPath,
+      healthUrl: useGateway ? gatewayInternalHealthUrl : `${String(backendUrl).replace(/\/+$/, "")}${healthPath}`,
+      healthBrowserUrl: useGateway ? gatewayBrowserHealthUrl : `${String(backendUrl).replace(/\/+$/, "")}${healthPath}`
     };
   }
+
+  const inactiveReason = deprecated
+    ? "API lifecycle is deprecated. No active probe is scheduled; status is lifecycle-controlled."
+    : enabled
+      ? "API is subscribed, but required health metadata is incomplete. Add health_backend_url, health_path and valid health_criticality to enable MI evaluation."
+      : "API is subscribed to API Catalogue Application but health_enabled is not true. It appears in the catalogue but is not actively probed.";
 
   return {
     apiId: api.id,
     name: api.name,
+    displayName: api.displayName || api.name,
     version: api.version,
     context: api.context,
     domain: p.health_domain || "Unclassified",
-    owner: {
+    owner: ownerFromApiDetails ? ownerFromApiDetails(api, p) : {
       team: p.health_owner_team || "Unknown",
       email: p.health_owner_email || "unknown@example.com"
     },
-    criticality: normalizedCriticality || criticalityRaw,
+    criticality: normalizedCriticality || criticalityRaw || "Tier 2",
     slaTarget: p.health_sla_target || "99.50%",
     runtime: p.health_runtime || "Unknown",
     lifecycle,
-    gatewayUrl: p.health_gateway_url || "",
+    gatewayUrl: gatewayAuth?.enabled ? APIM_GATEWAY_INTERNAL_BASE_URL : (p.health_gateway_url || ""),
+    gatewayBrowserUrl: gatewayAuth?.enabled ? APIM_GATEWAY_BROWSER_BASE_URL : "",
+    invocationMode: gatewayAuth?.enabled ? "APIM_GATEWAY" : "DIRECT_BACKEND",
     healthStrategy,
     probePolicy: {
       active: activeProbe,
-      tier: tierConfig ? tierConfig.key : null,
+      tier: activeProbe && tierConfig ? tierConfig.key : null,
       frequency: activeProbe && tierConfig ? tierConfig.frequencyLabel : "none",
       intervalSeconds: activeProbe && tierConfig ? tierConfig.intervalSeconds : null,
-      reason: deprecated
-        ? "API lifecycle is deprecated. No active probe is scheduled; status is lifecycle-controlled."
-        : "Active probe schedule derived from APIM health_criticality."
-    }
+      reason: activeProbe
+        ? gatewayAuth?.enabled
+          ? "Active probe schedule derived from APIM health_criticality. Invocation goes through APIM Gateway using API Catalogue Application token."
+          : "Active probe schedule derived from APIM health_criticality."
+        : inactiveReason
+    },
+    subscriptionApplication: API_CATALOGUE_APP_NAME
   };
 }
 
@@ -1201,10 +2091,17 @@ ${requestBodyXml}
 }
 
 function lifecycleControlledResult(record) {
+  const deprecated = isDeprecatedLifecycle(record.lifecycle);
+  const status = deprecated ? "DEPRECATED" : "UNKNOWN";
+  const reason = record.probePolicy && record.probePolicy.reason
+    ? record.probePolicy.reason
+    : "No active health probe is scheduled.";
+
   return {
     apiId: record.apiId,
     name: record.name,
     version: record.version,
+    context: record.context,
     domain: record.domain,
     owner: record.owner,
     runtime: record.runtime,
@@ -1221,18 +2118,20 @@ function lifecycleControlledResult(record) {
     },
     contract: {
       status: "SKIPPED",
-      reasons: ["API lifecycle is deprecated; no active health probe is scheduled."]
+      reasons: [reason]
     },
     sla: {
-      status: "LIFECYCLE_CONTROLLED",
+      status: deprecated ? "LIFECYCLE_CONTROLLED" : "PENDING",
       target: record.slaTarget,
       window: "demo"
     },
     probePolicy: record.probePolicy,
-    consumerStatus: "DEPRECATED",
-    reason: "API lifecycle is deprecated. Status is controlled by API Manager lifecycle, not by active probing.",
-    source: "wso2-integrator-mi",
-    sourceOfTruth: "wso2-api-manager"
+    consumerStatus: status,
+    reason,
+    source: "wso2-api-manager-devportal",
+    sourceOfTruth: "wso2-api-manager",
+    invocationMode: (typeof record !== "undefined" && record?.invocationMode) ? record.invocationMode : "UNKNOWN",
+    subscriptionApplication: API_CATALOGUE_APP_NAME
   };
 }
 
@@ -1476,9 +2375,31 @@ async function main() {
   console.log(`[sync-mi-health-from-apim] APIM_HOST=${APIM_HOST}`);
   console.log(`[sync-mi-health-from-apim] ARTIFACTS_ROOT=${ARTIFACTS_ROOT}`);
   console.log(`[sync-mi-health-from-apim] STATUS_CACHE_BASE_URL=${STATUS_CACHE_BASE_URL}`);
+  console.log(`[sync-mi-health-from-apim] API_CATALOGUE_APP_NAME=${API_CATALOGUE_APP_NAME}`);
 
   const client = await registerRestClient();
-  const token = await getAccessToken(client.clientId, client.clientSecret);
+  const token = await getAccessToken(client.clientId, client.clientSecret, [
+    "apim:api_view",
+    "apim:subscribe",
+    "apim:app_manage",
+    "apim:sub_manage"
+  ]);
+
+  const subscriptionSnapshot = await getCatalogueApplicationSubscriptionSnapshot(token);
+
+  const gatewayAuth = await ensureCatalogueApplicationGatewayCredentials(
+    token,
+    subscriptionSnapshot.application.id,
+    subscriptionSnapshot
+  );
+
+  console.log(
+    `[sync-mi-health-from-apim] ${subscriptionSnapshot.application.name} has ${subscriptionSnapshot.subscriptions.length} subscribed APIs`
+  );
+
+  console.log(
+    `[sync-mi-health-from-apim] Invocation mode=${gatewayAuth.enabled ? "APIM_GATEWAY" : "DIRECT_BACKEND"}${gatewayAuth.enabled ? `; token expires at ${gatewayAuth.accessTokenExpiresAt}` : ""}`
+  );
 
   const apiSummaries = await listApis(token);
   const fullApis = [];
@@ -1492,8 +2413,14 @@ async function main() {
     fullApis.push(api);
   }
 
-  const records = fullApis
-    .map(buildRegistryRecord)
+  const subscribedApis = fullApis.filter((api) => isSubscribedToCatalogueApplication(api, subscriptionSnapshot));
+
+  console.log(
+    `[sync-mi-health-from-apim] Publisher APIs=${fullApis.length}; subscribed catalogue APIs=${subscribedApis.length}`
+  );
+
+  const records = subscribedApis
+    .map((api) => buildRegistryRecord(api, gatewayAuth))
     .filter(Boolean)
     .map((record) => {
       if (!record.probePolicy.active) {
@@ -1553,15 +2480,19 @@ async function main() {
     renderHealthRegistryApi(records)
   );
 
+  await syncStatusCacheCatalogueMembership(records);
+
   console.log("");
   console.log("[sync-mi-health-from-apim] summary");
-  console.log(`  Active probes: ${activeRecords.length}`);
-  console.log(`  Lifecycle-controlled APIs: ${lifecycleControlledRecords.length}`);
-  console.log(`  Tier 0 / 1 min: ${tierGroups.tier0.length}`);
-  console.log(`  Tier 1 / 3 min: ${tierGroups.tier1.length}`);
-  console.log(`  Tier 2 / 10 min: ${tierGroups.tier2.length}`);
-  console.log(`  Tier 3 / 30 min: ${tierGroups.tier3.length}`);
-  console.log(`[sync-mi-health-from-apim] generated ${records.length} APIM-sourced health registry records`);
+  console.log(` Application: ${subscriptionSnapshot.application.name}`);
+  console.log(` Subscriptions: ${subscriptionSnapshot.subscriptions.length}`);
+  console.log(` Active probes: ${activeRecords.length}`);
+  console.log(` Subscribed but not actively probed: ${lifecycleControlledRecords.length}`);
+  console.log(` Tier 0 / 1 min: ${tierGroups.tier0.length}`);
+  console.log(` Tier 1 / 3 min: ${tierGroups.tier1.length}`);
+  console.log(` Tier 2 / 10 min: ${tierGroups.tier2.length}`);
+  console.log(` Tier 3 / 30 min: ${tierGroups.tier3.length}`);
+  console.log(`[sync-mi-health-from-apim] generated ${records.length} subscription-sourced health registry records`);
 }
 
 main().catch((error) => {
@@ -1778,7 +2709,7 @@ function postProcessGeneratedHealthFailureSequences() {
     <property name="messageType" value="application/json" scope="axis2"/>
     <property name="ContentType" value="application/json" scope="axis2"/>
     <property name="HTTP_METHOD" value="POST" scope="axis2"/>
-    <call>
+      <call>
         <endpoint>
             <http method="POST" uri-template="http://health-status-cache:6300/cache/results">
                 <timeout>

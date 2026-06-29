@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+
+echo "Clearing stale Gateway runtime token cache..."
+rm -f .runtime/api-catalogue-gateway-token.json || true
 set -euo pipefail
 
 echo "============================================================"
@@ -98,3 +101,10 @@ echo "  Control API:http://localhost:6400"
 echo
 echo "Credentials:"
 echo "  admin / admin"
+
+echo
+echo "Restarting platform-control so cached APIM/DevPortal tokens are refreshed..."
+npm run platform:control:stop || true
+npm run platform:control:start
+
+echo

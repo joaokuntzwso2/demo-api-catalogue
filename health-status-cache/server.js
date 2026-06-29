@@ -112,6 +112,25 @@ function upsertRecord(incoming) {
   }
 }
 
+function syncCatalogueMembership(records) {
+  const incoming = Array.isArray(records) ? records : [];
+  const allowed = new Set(incoming.map(recordKey));
+
+  results = results.filter((record) => allowed.has(recordKey(record)));
+
+  for (const record of incoming) {
+    upsertRecord(record);
+  }
+
+  dedupeResults();
+
+  return {
+    message: "Catalogue membership synchronized",
+    count: results.length,
+    allowed: Array.from(allowed)
+  };
+}
+
 function dedupeResults() {
   const byKey = new Map();
 
@@ -212,6 +231,18 @@ const server = http.createServer(async (req, res) => {
     sendJson(res, 200, {
       message: "Cache and history cleared"
     });
+    return;
+  }
+
+  if (req.method === "POST" && url.pathname === "/cache/catalogue-sync") {
+    try {
+      const rawBody = await readBody(req);
+      const payload = rawBody ? JSON.parse(rawBody) : [];
+      const records = Array.isArray(payload) ? payload : [payload];
+      sendJson(res, 200, syncCatalogueMembership(records));
+    } catch (error) {
+      sendJson(res, 400, { status: "ERROR", message: error.message });
+    }
     return;
   }
 

@@ -14,7 +14,7 @@
     "platform:import:initial3": "docker-compose --profile platform run --rm -e APIM_ALLOW_INSECURE_TLS=true apictl \"bash pipeline/scripts/deploy-initial-3-to-apim.sh\"",
     "platform:import:cards": "docker-compose --profile platform run --rm -e APIM_ALLOW_INSECURE_TLS=true apictl \"bash pipeline/scripts/deploy-cards-later-to-apim.sh\"",
     "platform:import:loans": "docker-compose --profile platform run --rm -e APIM_ALLOW_INSECURE_TLS=true apictl \"bash pipeline/scripts/deploy-loans-later-to-apim.sh\"",
-    "platform:reconcile-once": "docker-compose --profile platform run --rm -e APIM_ALLOW_INSECURE_TLS=true apictl \"node pipeline/scripts/sync-mi-health-from-apim.js\" && docker-compose --profile platform up -d --force-recreate wso2-integrator ui-platform",
+    "platform:reconcile-once": "npm run platform:reconcile:core && docker-compose --profile platform up -d --force-recreate wso2-integrator ui-platform",
     "platform:onboard": "npm run platform:import:all && npm run platform:post-onboard:all && npm run platform:reconcile-once",
     "platform:onboard:initial3": "npm run platform:import:initial3 && npm run platform:post-onboard:initial3 && npm run platform:reconcile-once",
     "platform:onboard:cards": "npm run platform:import:cards && npm run platform:post-onboard:cards && npm run platform:reconcile-once",
@@ -41,7 +41,7 @@
     "platform:post-onboard:cards": "node pipeline/scripts/apim-post-onboard.js cards-api",
     "platform:post-onboard:loans": "node pipeline/scripts/apim-post-onboard.js loans-api",
     "platform:post-onboard:all": "node pipeline/scripts/apim-post-onboard.js --all-demo",
-    "platform:app:subscriptions": "bash -lc 'CLIENT_RESPONSE=$(curl -ks -u admin:admin -H \"Content-Type: application/json\" -d \"{\"callbackUrl\":\"www.google.com\",\"clientName\":\"api-catalogue-app-check\",\"owner\":\"admin\",\"grantType\":\"password refresh_token client_credentials\",\"saasApp\":true}\" https://localhost:9443/client-registration/v0.17/register); CLIENT_ID=$(echo \"$CLIENT_RESPONSE\" | jq -r .clientId); CLIENT_SECRET=$(echo \"$CLIENT_RESPONSE\" | jq -r .clientSecret); TOKEN_RESPONSE=$(curl -ks -u \"$CLIENT_ID:$CLIENT_SECRET\" -H \"Content-Type: application/x-www-form-urlencoded\" -d \"grant_type=password&username=admin&password=admin&scope=apim:api_view apim:subscribe apim:app_manage apim:sub_manage\" https://localhost:9443/oauth2/token); ACCESS_TOKEN=$(echo \"$TOKEN_RESPONSE\" | jq -r .access_token); APP_ID=$(curl -ks -H \"Authorization: Bearer $ACCESS_TOKEN\" \"https://localhost:9443/api/am/devportal/v3/applications?limit=100\" | jq -r \".list[] | select(.name==\\\"API Catalogue Application\\\") | (.applicationId // .id)\"); echo \"Application ID: $APP_ID\"; curl -ks -H \"Authorization: Bearer $ACCESS_TOKEN\" \"https://localhost:9443/api/am/devportal/v3/subscriptions?applicationId=$APP_ID&limit=100\" | jq \".list[]? | {apiName: .apiInfo.name, apiVersion: .apiInfo.version, throttlingPolicy, status}\"'",
+    "platform:app:subscriptions": "node pipeline/scripts/list-catalogue-app-subscriptions.js",
     "platform:restart:fresh": "bash scripts/full-restart-with-service-catalog.sh",
     "platform:stop": "bash scripts/stop-platform.sh",
     "platform:control": "node platform-control/server.js",
@@ -49,7 +49,14 @@
     "platform:control:start": "bash scripts/start-platform-control.sh",
     "platform:control:stop": "bash scripts/stop-platform-control.sh",
     "platform:payload-overrides:show": "cat .runtime/health-payload-overrides.json 2>/dev/null || echo \"{}\"",
-    "platform:payload-overrides:reset": "rm -f .runtime/health-payload-overrides.json && echo \"Local health payload overrides cleared.\""
+    "platform:payload-overrides:reset": "rm -f .runtime/health-payload-overrides.json && echo \"Local health payload overrides cleared.\"",
+    "platform:reconcile:container": "rm -f .runtime/api-catalogue-gateway-token.json && node pipeline/scripts/set-api-operation-auth-application.js && node pipeline/scripts/force-fresh-gateway-revision.js && APIM_GATEWAY_INTERNAL_BASE_URL=http://wso2-apim:8280 APIM_GATEWAY_BROWSER_BASE_URL=http://localhost:8280 node pipeline/scripts/sync-mi-health-from-apim.js",
+    "platform:reconcile:core": "docker-compose --profile platform run --rm -e APIM_ALLOW_INSECURE_TLS=true -e APIM_GATEWAY_INTERNAL_BASE_URL=http://wso2-apim:8280 -e APIM_GATEWAY_BROWSER_BASE_URL=http://localhost:8280 apictl \"npm run platform:reconcile:container\"",
+    "platform:probe": "curl -s -X POST http://localhost:8290/health-registry/v1/probes/run | jq .",
+    "platform:status:apis": "curl -s http://localhost:8290/catalogue-status/v1/apis | jq '[.[] | {name, consumerStatus, invocationMode, httpStatus: .liveness.httpStatus, contract: .contract.status}]'",
+    "platform:gateway-token:reset": "rm -f .runtime/api-catalogue-gateway-token.json && echo 'Gateway runtime token cache cleared.'",
+    "platform:onboard:fresh": "npm run platform:gateway-token:reset && npm run platform:onboard",
+    "platform:post-onboard": "npm run platform:reconcile-once && sleep 25 && npm run platform:probe"
   },
   "workspaces": [
     "apis/*",
