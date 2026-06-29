@@ -3,8 +3,6 @@ version: v4.4.0
 data:
   id: null
   name: loans-api
-  categories:
-    - Loans
   description: Consulta de propostas, contratos e simulações de crédito.
   context: /loans/v1
   version: 1.0.0
@@ -51,10 +49,7 @@ data:
   - name: health_expected_http_status
     value: "200"
     display: true
-  - name: health_expected_payload_json
-    value: '{"status":"UP","service":"loans-api"}'
-    display: true
-  - name: health_required_fields
+- name: health_required_fields
     value: "status,service"
     display: true
   - name: health_sla_target

@@ -39,6 +39,12 @@ check_api_project() {
   echo ""
   echo "Checking APICTL project: ${api_name}"
 
+  if ! node pipeline/scripts/validate-apictl-onboarding-contract.js "${api_project}"; then
+    echo ""
+    echo "Reason: API Manager is the source of truth, so every onboarded API must include the required health_* metadata and a valid APIM category in api.yaml."
+    exit 1
+  fi
+
   if [ ! -d "${api_project}" ]; then
     echo "❌ API project directory not found: ${api_project}"
     exit 1

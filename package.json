@@ -58,7 +58,9 @@
     "platform:onboard:fresh": "npm run platform:gateway-token:reset && npm run platform:onboard",
     "platform:post-onboard": "npm run platform:reconcile-once && sleep 25 && npm run platform:probe",
     "platform:categories:bootstrap": "docker-compose --profile platform run --rm -e APIM_ALLOW_INSECURE_TLS=true apictl \"node pipeline/scripts/bootstrap-api-categories.js\"",
-    "platform:set-api-categories": "docker-compose --profile platform run --rm -e APIM_ALLOW_INSECURE_TLS=true apictl \"node pipeline/scripts/set-api-categories.js\""
+    "platform:set-api-categories": "docker-compose --profile platform run --rm -e APIM_ALLOW_INSECURE_TLS=true apictl \"node pipeline/scripts/set-api-categories.js\"",
+    "platform:categories:validate": "node pipeline/scripts/validate-apictl-categories.js apictl/apis/*",
+    "platform:categories:validate:container": "node pipeline/scripts/validate-apictl-categories.js apictl/apis/*"
   },
   "workspaces": [
     "apis/*",
