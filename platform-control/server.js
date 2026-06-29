@@ -1054,14 +1054,39 @@ function contractValidationWriteJson(file, value) {
   fs.writeFileSync(file, JSON.stringify(value, null, 2) + '\n');
 }
 
-function contractValidationOverrideFor(apiName, overrides) {
-  if (Object.prototype.hasOwnProperty.call(overrides, apiName)) {
-    return overrides[apiName];
+function contractValidationOverrideFor(apiName, overrides, valueField = null) {
+  const maps = [];
+
+  if (overrides && typeof overrides === 'object' && !Array.isArray(overrides)) {
+    if (overrides.overrides && typeof overrides.overrides === 'object' && !Array.isArray(overrides.overrides)) {
+      maps.push(overrides.overrides);
+    }
+
+    maps.push(overrides);
   }
 
-  const versionedKey = `${apiName}:1.0.0`;
-  if (Object.prototype.hasOwnProperty.call(overrides, versionedKey)) {
-    return overrides[versionedKey];
+  const keys = [apiName, `${apiName}:1.0.0`];
+
+  for (const map of maps) {
+    for (const key of keys) {
+      if (!Object.prototype.hasOwnProperty.call(map, key)) {
+        continue;
+      }
+
+      const value = map[key];
+
+      if (
+        valueField &&
+        value &&
+        typeof value === 'object' &&
+        !Array.isArray(value) &&
+        Object.prototype.hasOwnProperty.call(value, valueField)
+      ) {
+        return value[valueField];
+      }
+
+      return value;
+    }
   }
 
   return undefined;
@@ -1144,22 +1169,20 @@ function contractValidationReadBody(req) {
 
 function contractValidationBuildOptions() {
   const defaults = contractValidationReadJson(CONTRACT_DEFAULTS_FILE, {});
-  const requestOverrides = contractValidationReadJson(REQUEST_OVERRIDES_FILE, {});
-  const payloadOverrides = contractValidationReadJson(PAYLOAD_OVERRIDES_FILE, {});
 
   const apis = Object.keys(defaults).sort().map((apiName) => {
     const defaultConfig = defaults[apiName] || {};
-    const requestOverride = contractValidationOverrideFor(apiName, requestOverrides);
-    const payloadOverride = contractValidationOverrideFor(apiName, payloadOverrides);
+    const requestState = getRequestStateForApi(apiName);
+    const payloadState = getPayloadStateForApi(apiName);
 
     return {
       name: apiName,
       defaultRequest: defaultConfig.request || {},
-      effectiveRequest: requestOverride || defaultConfig.request || {},
-      hasRequestOverride: requestOverride !== undefined,
+      effectiveRequest: requestState.effectiveRequest || defaultConfig.request || {},
+      hasRequestOverride: Boolean(requestState.hasOverride),
       defaultPayload: defaultConfig.expectedPayload || {},
-      effectivePayload: payloadOverride || defaultConfig.expectedPayload || {},
-      hasPayloadOverride: payloadOverride !== undefined,
+      effectivePayload: payloadState.effectivePayload || defaultConfig.expectedPayload || {},
+      hasPayloadOverride: Boolean(payloadState.hasOverride),
       expectedHttpStatus: defaultConfig.expectedHttpStatus || 200,
       requiredFields: defaultConfig.requiredFields || []
     };
@@ -1182,12 +1205,8 @@ function handleContractValidationRoute(req, res) {
     try {
       contractValidationSendJson(res, 200, contractValidationBuildOptions());
     } catch (e) {
-      contractValidationSendJson(res, 500, {
-        status: 'ERROR',
-        message: e.message
-      });
+      contractValidationSendJson(res, 500, { status: 'ERROR', message: e.message });
     }
-
     return true;
   }
 
@@ -1211,37 +1230,22 @@ function handleContractValidationRoute(req, res) {
         const payload = body.payload;
 
         if (!apiName) {
-          contractValidationSendJson(res, 400, {
-            status: 'ERROR',
-            message: 'apiName is required'
-          });
+          contractValidationSendJson(res, 400, { status: 'ERROR', message: 'apiName is required' });
           return;
         }
 
         if (!request || typeof request !== 'object') {
-          contractValidationSendJson(res, 400, {
-            status: 'ERROR',
-            message: 'request must be a JSON object'
-          });
+          contractValidationSendJson(res, 400, { status: 'ERROR', message: 'request must be a JSON object' });
           return;
         }
 
         if (!payload || typeof payload !== 'object') {
-          contractValidationSendJson(res, 400, {
-            status: 'ERROR',
-            message: 'payload must be a JSON object'
-          });
+          contractValidationSendJson(res, 400, { status: 'ERROR', message: 'payload must be a JSON object' });
           return;
         }
 
-        const requestOverrides = contractValidationReadJson(REQUEST_OVERRIDES_FILE, {});
-        const payloadOverrides = contractValidationReadJson(PAYLOAD_OVERRIDES_FILE, {});
-
-        requestOverrides[apiName] = request;
-        payloadOverrides[apiName] = payload;
-
-        contractValidationWriteJson(REQUEST_OVERRIDES_FILE, requestOverrides);
-        contractValidationWriteJson(PAYLOAD_OVERRIDES_FILE, payloadOverrides);
+        const requestOverrideResult = writeRequestOverridesForApis([apiName], { [apiName]: request });
+        const payloadOverrideResult = writePayloadOverridesForApis([apiName], { [apiName]: payload });
 
         const syncArtifacts = await contractValidationRun('docker-compose', [
           '--profile',
@@ -1280,7 +1284,9 @@ function handleContractValidationRoute(req, res) {
             status: 'ERROR',
             message: 'MI-only reconcile failed',
             apiName,
-            reconcile
+            reconcile,
+            requestOverrideResult,
+            payloadOverrideResult
           });
           return;
         }
@@ -1288,32 +1294,28 @@ function handleContractValidationRoute(req, res) {
         const miReadiness = await contractValidationWaitForMi();
 
         let probe = null;
-
         try {
           const probeResponse = await fetch('http://localhost:8290/health-registry/v1/probes/run', {
             method: 'POST'
           });
           probe = await probeResponse.json();
         } catch (e) {
-          probe = {
-            status: 'ERROR',
-            message: `Probe trigger failed: ${e.message}`
-          };
+          probe = { status: 'ERROR', message: `Probe trigger failed: ${e.message}` };
         }
 
         contractValidationSendJson(res, 200, {
           status: 'COMPLETED',
           message: 'Contract validation overrides saved, MI artifacts reconciled, and validation triggered',
           apiName,
+          requestOverrideResult,
+          payloadOverrideResult,
           reconcile,
+          miReadiness,
           probe
         });
       })
       .catch((e) => {
-        contractValidationSendJson(res, 500, {
-          status: 'ERROR',
-          message: e.message
-        });
+        contractValidationSendJson(res, 500, { status: 'ERROR', message: e.message });
       });
 
     return true;
@@ -1581,11 +1583,106 @@ async function apiRuntimeControlPostCacheRecord(record) {
 async function apiRuntimeControlTriggerProbe() {
   return apiRuntimeControlFetchWithTimeout(
     'http://localhost:8290/health-registry/v1/probes/run',
-    {
-      method: 'POST'
-    },
-    12000
+    { method: 'POST' },
+    20000
   );
+}
+
+function apiRuntimeControlNormalizeStatus(value) {
+  return String(value || '').trim().toUpperCase();
+}
+
+async function apiRuntimeControlFindCachedResult(apiName) {
+  const results = await apiRuntimeControlGetCachedResults();
+  return results.find((record) =>
+    record &&
+    record.name === apiName &&
+    String(record.version || '1.0.0') === '1.0.0'
+  ) || null;
+}
+
+function apiRuntimeControlLivenessRecovered(record) {
+  if (!record) {
+    return false;
+  }
+
+  const livenessStatus = apiRuntimeControlNormalizeStatus(record.liveness?.status);
+  const consumerStatus = apiRuntimeControlNormalizeStatus(record.consumerStatus);
+  const httpStatus = Number(record.liveness?.httpStatus ?? record.httpStatus ?? 0);
+
+  if (['OK', 'UP', 'GREEN', 'PASSED', 'SUCCESS', 'AVAILABLE'].includes(livenessStatus)) {
+    return true;
+  }
+
+  if (httpStatus >= 200 && httpStatus < 300 && consumerStatus !== 'UNKNOWN') {
+    return true;
+  }
+
+  return false;
+}
+
+async function apiRuntimeControlWaitForDockerRunning(serviceName, timeoutMs = 90000, intervalMs = 3000) {
+  const deadline = Date.now() + timeoutMs;
+  let lastState = null;
+
+  while (Date.now() < deadline) {
+    lastState = await apiRuntimeControlDockerState(serviceName);
+
+    if (lastState.state === 'running') {
+      return {
+        status: 'OK',
+        serviceName,
+        state: lastState
+      };
+    }
+
+    await sleepMs(intervalMs);
+  }
+
+  return {
+    status: 'TIMEOUT',
+    serviceName,
+    state: lastState,
+    message: `${serviceName} did not reach Docker running state within ${Math.round(timeoutMs / 1000)}s`
+  };
+}
+
+async function apiRuntimeControlWaitForRecoveredStatus(apiName, timeoutMs = 150000, intervalMs = 5000) {
+  const deadline = Date.now() + timeoutMs;
+  let attempts = 0;
+  let lastProbe = null;
+  let lastRecord = null;
+
+  while (Date.now() < deadline) {
+    attempts += 1;
+
+    lastProbe = await apiRuntimeControlTriggerProbe();
+
+    // Give MI/cache a moment to persist the probe result.
+    await sleepMs(2500);
+
+    lastRecord = await apiRuntimeControlFindCachedResult(apiName);
+
+    if (apiRuntimeControlLivenessRecovered(lastRecord)) {
+      return {
+        status: 'OK',
+        attempts,
+        probe: lastProbe,
+        record: lastRecord,
+        message: `${apiName} liveness recovered`
+      };
+    }
+
+    await sleepMs(intervalMs);
+  }
+
+  return {
+    status: 'TIMEOUT',
+    attempts,
+    probe: lastProbe,
+    record: lastRecord,
+    message: `${apiName} did not recover within ${Math.round(timeoutMs / 1000)}s`
+  };
 }
 
 async function apiRuntimeControlWriteStoppedResult(apiName, serviceName, dockerState) {
@@ -1660,10 +1757,7 @@ function handleApiRuntimeControlRoute(req, res) {
         apis
       });
     } catch (e) {
-      apiRuntimeControlSendJson(res, 500, {
-        status: 'ERROR',
-        message: e.message
-      });
+      apiRuntimeControlSendJson(res, 500, { status: 'ERROR', message: e.message });
     }
 
     return true;
@@ -1713,7 +1807,7 @@ function handleApiRuntimeControlRoute(req, res) {
         const runtime = await apiRuntimeControlRun(
           'docker-compose',
           commandArgs,
-          action === 'stop' ? 15000 : 30000
+          action === 'stop' ? 15000 : 45000
         );
 
         const after = await apiRuntimeControlDockerState(serviceName);
@@ -1732,38 +1826,51 @@ function handleApiRuntimeControlRoute(req, res) {
           return;
         }
 
-        const forcedStatus = action === 'stop'
-          ? await apiRuntimeControlWriteStoppedResult(apiName, serviceName, after)
-          : {
-              status: 'SKIPPED',
-              reason: 'Start action relies on MI probe to restore GREEN status.'
-            };
+        if (action === 'stop') {
+          const forcedStatus = await apiRuntimeControlWriteStoppedResult(apiName, serviceName, after);
 
-        const probe = action === 'start'
-          ? await apiRuntimeControlTriggerProbe()
-          : {
+          apiRuntimeControlSendJson(res, 200, {
+            status: 'COMPLETED',
+            message: `${serviceName} stopped and marked RED`,
+            apiName,
+            serviceName,
+            action,
+            before,
+            after,
+            runtime,
+            forcedStatus,
+            probe: {
               status: 'SKIPPED',
               reason: 'Stop action already wrote RED status after Docker stop.'
-            };
+            }
+          });
+          return;
+        }
+
+        const dockerReadiness = await apiRuntimeControlWaitForDockerRunning(serviceName);
+        const recovery = await apiRuntimeControlWaitForRecoveredStatus(apiName);
 
         apiRuntimeControlSendJson(res, 200, {
-          status: 'COMPLETED',
-          message: `${serviceName} ${action === 'stop' ? 'stopped and marked RED' : 'started and MI probe requested'}`,
+          status: recovery.status === 'OK' ? 'COMPLETED' : 'RECOVERY_PENDING',
+          message: recovery.status === 'OK'
+            ? `${serviceName} started and liveness recovered`
+            : `${serviceName} started, but liveness recovery is still pending`,
           apiName,
           serviceName,
           action,
           before,
           after,
           runtime,
-          forcedStatus,
-          probe
+          dockerReadiness,
+          forcedStatus: {
+            status: 'SKIPPED',
+            reason: 'Start action waits for MI/cache recovery instead of writing synthetic GREEN.'
+          },
+          probe: recovery
         });
       })
       .catch((e) => {
-        apiRuntimeControlSendJson(res, 500, {
-          status: 'ERROR',
-          message: e.message
-        });
+        apiRuntimeControlSendJson(res, 500, { status: 'ERROR', message: e.message });
       });
 
     return true;

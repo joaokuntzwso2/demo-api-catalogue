@@ -291,7 +291,7 @@ function resolveRuntimeOverrideFile(filename, envVarName) {
   return path.resolve(process.cwd(), ".runtime", filename);
 }
 
-function readRuntimeOverrideMap(filename, envVarName) {
+function readRuntimeOverrideMap(filename, envVarName, valueField = null) {
   const file = resolveRuntimeOverrideFile(filename, envVarName);
 
   if (!fs.existsSync(file)) {
@@ -299,7 +299,41 @@ function readRuntimeOverrideMap(filename, envVarName) {
   }
 
   try {
-    return JSON.parse(fs.readFileSync(file, "utf8"));
+    const raw = JSON.parse(fs.readFileSync(file, "utf8"));
+    const normalized = {};
+
+    function put(key, value) {
+      if (!key || key === "version" || key === "updatedAt" || key === "overrides") {
+        return;
+      }
+
+      if (
+        valueField &&
+        value &&
+        typeof value === "object" &&
+        !Array.isArray(value) &&
+        Object.prototype.hasOwnProperty.call(value, valueField)
+      ) {
+        normalized[key] = value[valueField];
+      } else {
+        normalized[key] = value;
+      }
+    }
+
+    if (raw && typeof raw === "object" && !Array.isArray(raw)) {
+      if (raw.overrides && typeof raw.overrides === "object" && !Array.isArray(raw.overrides)) {
+        for (const [key, value] of Object.entries(raw.overrides)) {
+          put(key, value);
+        }
+      }
+
+      // Direct row-level keys win over stale wrapped onboarding entries.
+      for (const [key, value] of Object.entries(raw)) {
+        put(key, value);
+      }
+    }
+
+    return normalized;
   } catch (e) {
     throw new Error(`Invalid runtime override file ${file}: ${e.message}`);
   }
@@ -315,7 +349,8 @@ function contractOverrideKeys(api) {
 function getContractRequestOverride(api) {
   const overrides = readRuntimeOverrideMap(
     "contract-request-overrides.json",
-    "CONTRACT_REQUEST_OVERRIDES_FILE"
+    "CONTRACT_REQUEST_OVERRIDES_FILE",
+    "request"
   );
 
   for (const key of contractOverrideKeys(api)) {
@@ -330,7 +365,8 @@ function getContractRequestOverride(api) {
 function getPayloadOverride(api) {
   const overrides = readRuntimeOverrideMap(
     "contract-payload-overrides.json",
-    "CONTRACT_PAYLOAD_OVERRIDES_FILE"
+    "CONTRACT_PAYLOAD_OVERRIDES_FILE",
+    "expectedPayload"
   );
 
   for (const key of contractOverrideKeys(api)) {

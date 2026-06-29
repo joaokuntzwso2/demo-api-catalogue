@@ -216,6 +216,25 @@ export default function ContractValidationPanel() {
         return;
       }
 
+      // Contract editing must only be available from real API rows.
+      // Do not decorate table headers, summary cards, side/details panels, or modal content.
+      const tableBodyCell = element.closest("tbody td");
+
+      if (!tableBodyCell) {
+        return;
+      }
+
+      if (
+        element.closest("thead") ||
+        element.closest("th") ||
+        element.closest(".details") ||
+        element.closest(".detail-panel") ||
+        element.closest(".api-details") ||
+        element.closest("aside")
+      ) {
+        return;
+      }
+
       element.classList.add("contract-validation-contract-target");
       element.setAttribute("data-contract-validation-api-name", apiName);
       element.setAttribute("title", `Edit validation contract for ${apiName}`);
@@ -223,6 +242,25 @@ export default function ContractValidationPanel() {
 
     function markRuntimeTarget(element, apiName) {
       if (!element || !apiName || element.closest(".contract-validation-modal")) {
+        return;
+      }
+
+      // Runtime Start/Stop must only be available from real API rows.
+      // Do not decorate table headers, summary cards, side/details panels, or modal content.
+      const tableBodyCell = element.closest("tbody td");
+
+      if (!tableBodyCell) {
+        return;
+      }
+
+      if (
+        element.closest("thead") ||
+        element.closest("th") ||
+        element.closest(".details") ||
+        element.closest(".detail-panel") ||
+        element.closest(".api-details") ||
+        element.closest("aside")
+      ) {
         return;
       }
 
@@ -412,7 +450,12 @@ export default function ContractValidationPanel() {
       const data = await readJsonResponse(response, "Contract validation job");
 
       setResult(data);
-      setMessage("Overrides saved, MI validation redeployed, and probe triggered.");
+      setMessage("Overrides saved, MI validation redeployed, probe triggered, and screen will refresh.");
+
+      setTimeout(() => {
+        window.location.reload();
+      }, 1200);
+
       await loadOptions(selectedName);
     } catch (e) {
       setMessage(e.message);
