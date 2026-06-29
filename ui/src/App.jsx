@@ -68,6 +68,12 @@ function displayApiName(api) {
   return api?.displayName || api?.apiDisplayName || api?.name || 'unknown-api';
 }
 
+
+function displayDomain(api) {
+  const categories = Array.isArray(api?.categories) ? api.categories : [];
+  return api?.category || categories[0] || api?.domain || 'Unclassified';
+}
+
 function statusRank(status) {
   const index = statusOrder.indexOf(status || 'UNKNOWN');
   return index === -1 ? statusOrder.indexOf('UNKNOWN') : index;
@@ -184,7 +190,7 @@ function App() {
 
       return [
         api.name,
-        api.domain,
+        displayDomain(api),
         api.owner?.team,
         api.runtime,
         api.criticality,
@@ -286,7 +292,7 @@ function App() {
                     <small>{api.version} · {api.lifecycle}</small>
                   </td>
 
-                  <td>{api.domain}</td>
+                  <td>{displayDomain(api)}</td>
 
                   <td>
                     {api.owner?.team}

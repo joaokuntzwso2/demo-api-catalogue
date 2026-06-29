@@ -3,6 +3,8 @@ version: v4.4.0
 data:
   id: null
   name: accounts-api
+  categories:
+    - Accounts
   description: Consulta de contas, saldos e transações de clientes.
   context: /accounts/v1
   version: 1.0.0
@@ -73,3 +75,4 @@ data:
   - name: health_owner_email
     value: "core-banking-platform@example.com"
     display: true
+additionalProperties:

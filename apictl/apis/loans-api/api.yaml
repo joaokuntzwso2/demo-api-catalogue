@@ -3,6 +3,8 @@ version: v4.4.0
 data:
   id: null
   name: loans-api
+  categories:
+    - Loans
   description: Consulta de propostas, contratos e simulações de crédito.
   context: /loans/v1
   version: 1.0.0
@@ -70,3 +72,4 @@ data:
   - name: health_owner_team
     value: "Lending Platform"
     display: true
+additionalProperties:

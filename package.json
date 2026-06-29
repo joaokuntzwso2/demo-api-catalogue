@@ -50,13 +50,15 @@
     "platform:control:stop": "bash scripts/stop-platform-control.sh",
     "platform:payload-overrides:show": "cat .runtime/health-payload-overrides.json 2>/dev/null || echo \"{}\"",
     "platform:payload-overrides:reset": "rm -f .runtime/health-payload-overrides.json && echo \"Local health payload overrides cleared.\"",
-    "platform:reconcile:container": "rm -f .runtime/api-catalogue-gateway-token.json && node pipeline/scripts/set-api-operation-auth-application.js && node pipeline/scripts/force-fresh-gateway-revision.js && APIM_GATEWAY_INTERNAL_BASE_URL=http://wso2-apim:8280 APIM_GATEWAY_BROWSER_BASE_URL=http://localhost:8280 node pipeline/scripts/sync-mi-health-from-apim.js",
+    "platform:reconcile:container": "rm -f .runtime/api-catalogue-gateway-token.json && node pipeline/scripts/bootstrap-api-categories.js && node pipeline/scripts/set-api-operation-auth-application.js && node pipeline/scripts/set-api-categories.js && node pipeline/scripts/force-fresh-gateway-revision.js && APIM_GATEWAY_INTERNAL_BASE_URL=http://wso2-apim:8280 APIM_GATEWAY_BROWSER_BASE_URL=http://localhost:8280 node pipeline/scripts/sync-mi-health-from-apim.js",
     "platform:reconcile:core": "docker-compose --profile platform run --rm -e APIM_ALLOW_INSECURE_TLS=true -e APIM_GATEWAY_INTERNAL_BASE_URL=http://wso2-apim:8280 -e APIM_GATEWAY_BROWSER_BASE_URL=http://localhost:8280 apictl \"npm run platform:reconcile:container\"",
     "platform:probe": "curl -s -X POST http://localhost:8290/health-registry/v1/probes/run | jq .",
     "platform:status:apis": "curl -s http://localhost:8290/catalogue-status/v1/apis | jq '[.[] | {name, consumerStatus, invocationMode, httpStatus: .liveness.httpStatus, contract: .contract.status}]'",
     "platform:gateway-token:reset": "rm -f .runtime/api-catalogue-gateway-token.json && echo 'Gateway runtime token cache cleared.'",
     "platform:onboard:fresh": "npm run platform:gateway-token:reset && npm run platform:onboard",
-    "platform:post-onboard": "npm run platform:reconcile-once && sleep 25 && npm run platform:probe"
+    "platform:post-onboard": "npm run platform:reconcile-once && sleep 25 && npm run platform:probe",
+    "platform:categories:bootstrap": "docker-compose --profile platform run --rm -e APIM_ALLOW_INSECURE_TLS=true apictl \"node pipeline/scripts/bootstrap-api-categories.js\"",
+    "platform:set-api-categories": "docker-compose --profile platform run --rm -e APIM_ALLOW_INSECURE_TLS=true apictl \"node pipeline/scripts/set-api-categories.js\""
   },
   "workspaces": [
     "apis/*",

@@ -3,6 +3,8 @@ version: v4.4.0
 data:
   id: null
   name: cards-api
+  categories:
+    - Cards
   description: Consulta de cartões, limites e status operacional.
   context: /cards/v1
   version: 1.0.0
@@ -73,3 +75,4 @@ data:
   - name: health_owner_email
     value: "cards-platform@example.com"
     display: true
+additionalProperties:

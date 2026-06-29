@@ -3,6 +3,8 @@ version: v4.4.0
 data:
   id: null
   name: customers-api
+  categories:
+    - Customers
   description: Consulta de dados cadastrais e perfil de cliente.
   context: /customers/v1
   version: 1.0.0
@@ -73,3 +75,4 @@ data:
   - name: health_owner_email
     value: "customer-platform@example.com"
     display: true
+additionalProperties:

@@ -3,6 +3,8 @@ version: v4.4.0
 data:
   id: null
   name: payments-api
+  categories:
+    - Payments
   description: Iniciação e consulta de pagamentos internos e instantâneos.
   context: /payments/v1
   version: 1.0.0
@@ -73,3 +75,4 @@ data:
   - name: health_owner_email
     value: "payments-platform@example.com"
     display: true
+additionalProperties:

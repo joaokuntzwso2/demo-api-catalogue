@@ -2849,6 +2849,175 @@ function dp2BuildHealthUrlsFromApiDetails(api, fallback = {}) {
 }
 
 
+
+function dp2AsArray(value) {
+  if (!value) {
+    return [];
+  }
+
+  return Array.isArray(value) ? value : [value];
+}
+
+function dp2GatewayEndpointUrls(api) {
+  return dp2AsArray(
+    api?.endpointURLs ||
+    api?.endpointUrls ||
+    api?.gatewayURLs ||
+    api?.gatewayUrls
+  );
+}
+
+function dp2GatewayDeployments(api) {
+  return dp2AsArray(
+    api?.deploymentInfo ||
+    api?.deployments ||
+    api?.gatewayDeployments ||
+    api?.gatewayDeploymentInfo
+  );
+}
+
+function dp2GatewayEnvironmentFromApiDetails(api, fallback = {}) {
+  const endpoint = dp2GatewayEndpointUrls(api).find(Boolean) || {};
+  const deployment = dp2GatewayDeployments(api).find(Boolean) || {};
+
+  return (
+    endpoint.environmentDisplayName ||
+    endpoint.displayName ||
+    endpoint.environmentName ||
+    endpoint.name ||
+    deployment.environmentDisplayName ||
+    deployment.displayName ||
+    deployment.environment ||
+    deployment.name ||
+    fallback.gatewayEnvironment ||
+    fallback.runtime ||
+    'APIM Gateway'
+  );
+}
+
+function dp2GatewayVhostFromApiDetails(api, fallback = {}) {
+  const endpoint = dp2GatewayEndpointUrls(api).find(Boolean) || {};
+  const deployment = dp2GatewayDeployments(api).find(Boolean) || {};
+
+  return (
+    endpoint.vhost ||
+    endpoint.virtualHost ||
+    endpoint.host ||
+    deployment.vhost ||
+    deployment.virtualHost ||
+    deployment.host ||
+    fallback.gatewayVhost ||
+    null
+  );
+}
+
+function dp2GatewayRuntimeFromApiDetails(api, fallback = {}) {
+  const environment = dp2GatewayEnvironmentFromApiDetails(api, fallback);
+  const vhost = dp2GatewayVhostFromApiDetails(api, fallback);
+
+  if (environment && vhost) {
+    return `${environment} / ${vhost}`;
+  }
+
+  return environment || 'APIM Gateway';
+}
+
+function dp2MergeApiDetailsForGatewayRuntime(publisherDetails, devPortalDetails) {
+  if (!publisherDetails && !devPortalDetails) {
+    return null;
+  }
+
+  return {
+    ...(publisherDetails || {}),
+    ...(devPortalDetails || {}),
+
+    // Keep business metadata from Publisher when DevPortal response is lighter.
+    businessInformation:
+      publisherDetails?.businessInformation ||
+      devPortalDetails?.businessInformation,
+
+    additionalProperties:
+      publisherDetails?.additionalProperties ||
+      devPortalDetails?.additionalProperties,
+
+    properties:
+      publisherDetails?.properties ||
+      devPortalDetails?.properties,
+
+    // Prefer DevPortal Gateway endpoint metadata for runtime display.
+    endpointURLs:
+      devPortalDetails?.endpointURLs ||
+      devPortalDetails?.endpointUrls ||
+      publisherDetails?.endpointURLs ||
+      publisherDetails?.endpointUrls,
+
+    endpointUrls:
+      devPortalDetails?.endpointUrls ||
+      devPortalDetails?.endpointURLs ||
+      publisherDetails?.endpointUrls ||
+      publisherDetails?.endpointURLs,
+
+    deploymentInfo:
+      devPortalDetails?.deploymentInfo ||
+      devPortalDetails?.deployments ||
+      publisherDetails?.deploymentInfo ||
+      publisherDetails?.deployments,
+
+    deployments:
+      devPortalDetails?.deployments ||
+      devPortalDetails?.deploymentInfo ||
+      publisherDetails?.deployments ||
+      publisherDetails?.deploymentInfo
+  };
+}
+
+async function dp2FetchDevPortalApiDetails(token, subscription) {
+  const info = dp2SubscriptionInfo(subscription);
+  const apiId = subscription.apiId || info.id || info.apiId;
+
+  if (!apiId) {
+    return null;
+  }
+
+  try {
+    return await dp2RequestJson(`${DP2_APIM_HOST}/api/am/devportal/v3/apis/${encodeURIComponent(apiId)}`, {
+      headers: { Authorization: `Bearer ${token}` }
+    });
+  } catch (e) {
+    console.warn(`[platform-control-devportal-catalogue] Could not fetch DevPortal API details for ${apiId}: ${e.message}`);
+    return null;
+  }
+}
+
+
+
+function dp2CategoryNamesFromApiDetails(api, fallback = {}) {
+  const values =
+    api?.categories ||
+    api?.apiCategories ||
+    api?.category ||
+    fallback.categories ||
+    fallback.apiCategories ||
+    fallback.category ||
+    [];
+
+  const list = Array.isArray(values) ? values : [values];
+
+  return list
+    .map((item) => {
+      if (!item) return null;
+      if (typeof item === 'string') return item;
+      return item.name || item.displayName || item.label || item.value || null;
+    })
+    .filter(Boolean);
+}
+
+function dp2PrimaryCategoryFromApiDetails(api, fallback = {}) {
+  const categories = dp2CategoryNamesFromApiDetails(api, fallback);
+  return categories[0] || null;
+}
+
+
 function dp2MetadataFromApiDetails(api, fallback = {}) {
   if (!api) {
     return {};
@@ -2857,6 +3026,10 @@ function dp2MetadataFromApiDetails(api, fallback = {}) {
   const props = dp2ToPropertyMap(api);
   const owner = dp2OwnerFromApiDetails(api, fallback.owner || {});
   const healthUrls = dp2BuildHealthUrlsFromApiDetails(api, fallback);
+  const categoryNames = dp2CategoryNamesFromApiDetails(api, fallback);
+  const primaryCategory = dp2PrimaryCategoryFromApiDetails(api, fallback);
+  const gatewayEnvironment = dp2GatewayEnvironmentFromApiDetails(api, fallback);
+  const gatewayRuntime = dp2GatewayRuntimeFromApiDetails(api, fallback);
 
   return {
     ...healthUrls,
@@ -2866,9 +3039,13 @@ function dp2MetadataFromApiDetails(api, fallback = {}) {
     version: api.version || fallback.version,
     context: api.context || fallback.context || null,
     lifecycle: api.lifeCycleStatus || api.lifecycleStatus || api.status || fallback.lifecycle,
-    domain: props.health_domain || props.domain || fallback.domain || 'Unclassified',
+    domain: primaryCategory || fallback.category || props.domain || props.health_domain || fallback.domain || 'Unclassified',
+    category: primaryCategory || fallback.category || null,
+    categories: categoryNames,
     owner,
-    runtime: props.health_runtime || props.runtime || fallback.runtime || 'Unknown',
+    runtime: gatewayRuntime,
+    gatewayRuntime,
+    gatewayEnvironment,
     criticality: props.health_criticality || props.criticality || fallback.criticality || 'Unclassified',
     slaTarget: props.health_sla_target || props.slaTarget || fallback.slaTarget || '99.50%'
   };
@@ -2967,10 +3144,19 @@ async function dp2BuildCatalogueRows() {
     subscriptions.map((subscription) => dp2FetchPublisherApiDetails(token, subscription))
   );
 
+  const devPortalApiDetailsBySubscription = await Promise.all(
+    subscriptions.map((subscription) => dp2FetchDevPortalApiDetails(token, subscription))
+  );
+
   return subscriptions.map((subscription, index) => {
     const placeholder = dp2PlaceholderRow(subscription);
     const cached = dp2FindCachedRow(cacheRows, subscription);
-    const publisherMetadata = dp2MetadataFromApiDetails(apiDetailsBySubscription[index], {
+    const apiDetails = dp2MergeApiDetailsForGatewayRuntime(
+      apiDetailsBySubscription[index],
+      devPortalApiDetailsBySubscription[index]
+    );
+
+    const publisherMetadata = dp2MetadataFromApiDetails(apiDetails, {
       ...placeholder,
       ...(cached || {})
     });
