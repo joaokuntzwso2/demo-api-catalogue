@@ -1,0 +1,17 @@
+rules:
+  api-category-required:
+    description: "APIs devem estar associadas a pelo menos uma categoria do API Manager antes da implantação ou publicação."
+    message: "A API deve ter pelo menos uma categoria do API Manager antes de ser implantada ou publicada."
+    severity: error
+    given: $.data
+    then:
+      function: schema
+      functionOptions:
+        schema:
+          type: object
+          required:
+            - categories
+          properties:
+            categories:
+              type: array
+              minItems: 1

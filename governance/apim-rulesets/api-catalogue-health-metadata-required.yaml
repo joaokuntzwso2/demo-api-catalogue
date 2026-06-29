@@ -1,0 +1,99 @@
+rules:
+  health-enabled-required:
+    description: "APIs devem declarar se a validação de saúde está habilitada."
+    message: "Propriedade customizada obrigatória ausente: health_enabled."
+    severity: error
+    given: $.data
+    then:
+      field: additionalPropertiesMap.health_enabled
+      function: truthy
+
+  health-backend-url-required:
+    description: "APIs devem declarar a URL base do backend usada pela orquestração de saúde."
+    message: "Propriedade customizada obrigatória ausente: health_backend_url."
+    severity: error
+    given: $.data
+    then:
+      field: additionalPropertiesMap.health_backend_url
+      function: truthy
+
+  health-path-required:
+    description: "APIs devem declarar o caminho do endpoint de saúde."
+    message: "Propriedade customizada obrigatória ausente: health_path."
+    severity: error
+    given: $.data
+    then:
+      field: additionalPropertiesMap.health_path
+      function: truthy
+
+  health-method-required:
+    description: "APIs devem declarar o método HTTP usado na validação de saúde."
+    message: "Propriedade customizada obrigatória ausente: health_method."
+    severity: error
+    given: $.data
+    then:
+      field: additionalPropertiesMap.health_method
+      function: truthy
+
+  health-expected-http-status-required:
+    description: "APIs devem declarar o status HTTP esperado na validação de saúde."
+    message: "Propriedade customizada obrigatória ausente: health_expected_http_status."
+    severity: error
+    given: $.data
+    then:
+      field: additionalPropertiesMap.health_expected_http_status
+      function: truthy
+
+  health-expected-payload-json-required:
+    description: "APIs devem declarar o payload JSON esperado na resposta de saúde."
+    message: "Propriedade customizada obrigatória ausente: health_expected_payload_json."
+    severity: error
+    given: $.data
+    then:
+      field: additionalPropertiesMap.health_expected_payload_json
+      function: truthy
+
+  health-required-fields-required:
+    description: "APIs devem declarar os campos obrigatórios esperados no payload de saúde."
+    message: "Propriedade customizada obrigatória ausente: health_required_fields."
+    severity: error
+    given: $.data
+    then:
+      field: additionalPropertiesMap.health_required_fields
+      function: truthy
+
+  health-sla-target-required:
+    description: "APIs devem declarar o alvo de SLA operacional."
+    message: "Propriedade customizada obrigatória ausente: health_sla_target."
+    severity: error
+    given: $.data
+    then:
+      field: additionalPropertiesMap.health_sla_target
+      function: truthy
+
+  health-criticality-required:
+    description: "APIs devem declarar sua criticidade operacional."
+    message: "Propriedade customizada obrigatória ausente: health_criticality."
+    severity: error
+    given: $.data
+    then:
+      field: additionalPropertiesMap.health_criticality
+      function: truthy
+
+  health-owner-team-required:
+    description: "APIs devem declarar o time responsável pela operação."
+    message: "Propriedade customizada obrigatória ausente: health_owner_team."
+    severity: error
+    given: $.data
+    then:
+      field: additionalPropertiesMap.health_owner_team
+      function: truthy
+
+  health-owner-email-required:
+    description: "APIs devem declarar o e-mail do responsável operacional."
+    message: "Propriedade customizada obrigatória ausente: health_owner_email."
+    severity: error
+    given: $.data
+    then:
+      field: additionalPropertiesMap.health_owner_email
+      function: truthy

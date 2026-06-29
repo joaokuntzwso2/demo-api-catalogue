@@ -1,0 +1,209 @@
+openapi: 3.0.3
+info:
+  title: Nova Finance - SEFAZ Service (Mock)
+  version: 1.0.0
+  description: Mock API for NF-e issuance and lookup through a simulated SEFAZ backend.
+
+servers:
+  - url: http://localhost:9302
+    description: Local/dev
+  - url: http://host.docker.internal:9302
+    description: Docker host runtime for local APIM/MI access
+
+x-wso2-basePath: /sefaz-service/1.0.0
+x-wso2-transports:
+  - http
+  - https
+x-wso2-production-endpoints:
+  urls:
+    - http://host.docker.internal:9302
+  type: http
+
+x-api-catalogue-governance:
+  category: Payments
+  health_enabled: "true"
+  health_backend_url: "http://host.docker.internal:9302"
+  health_path: "/health"
+  health_method: "GET"
+  health_expected_http_status: "200"
+  health_expected_payload_json: '{"status":"UP","service":"sefaz-service"}'
+  health_required_fields: "status,service"
+  health_sla_target: "99.5%"
+  health_criticality: "Tier 1"
+  health_owner_team: "SEFAZ Integration Squad"
+  health_owner_email: "sefaz-integration@nova-finance.demo"
+
+tags:
+  - name: SEFAZ
+    description: NF-e issuance and lookup operations.
+  - name: Health
+    description: Operational health check endpoint.
+
+paths:
+  /sefaz/nfe:
+    post:
+      tags: [SEFAZ]
+      operationId: issueNfe
+      summary: Issue NF-e for an invoice
+      description: Issues a mock NF-e for an invoice. The service may return 503 transiently in demo scenarios.
+      x-auth-type: "Application"
+      x-throttling-tier: "Unlimited"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/NfeIssueRequest"
+      responses:
+        "200":
+          description: NF-e authorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NfeRecord"
+        "400":
+          description: Missing required fields or invalid JSON
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "503":
+          description: SEFAZ temporarily unavailable in the demo
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /sefaz/nfe/by-invoice/{invoiceId}:
+    get:
+      tags: [SEFAZ]
+      operationId: getNfeByInvoice
+      summary: Get NF-e record by invoice ID
+      x-auth-type: "Application"
+      x-throttling-tier: "Unlimited"
+      parameters:
+        - name: invoiceId
+          in: path
+          required: true
+          schema:
+            type: string
+            example: INV-1766422114332
+      responses:
+        "200":
+          description: NF-e record
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NfeRecord"
+        "404":
+          description: NF-e not found for invoice
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /health:
+    get:
+      tags: [Health]
+      operationId: healthSefaz
+      summary: Health check
+      description: Returns the operational health state of the mock SEFAZ service.
+      x-auth-type: "None"
+      x-throttling-tier: "Unlimited"
+      responses:
+        "200":
+          description: Service is up
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+              example:
+                status: UP
+                service: sefaz-service
+
+components:
+  schemas:
+    ErrorResponse:
+      type: object
+      additionalProperties: false
+      required:
+        - error
+      properties:
+        error:
+          type: string
+          example: SEFAZ temporarily unavailable
+        invoiceId:
+          type: string
+        subsidiaryId:
+          type: string
+        path:
+          type: string
+
+    HealthResponse:
+      type: object
+      additionalProperties: false
+      required:
+        - status
+        - service
+      properties:
+        status:
+          type: string
+          enum:
+            - UP
+            - DOWN
+          example: UP
+        service:
+          type: string
+          example: sefaz-service
+
+    NfeIssueRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - invoiceId
+        - subsidiaryId
+        - totalAmount
+      properties:
+        invoiceId:
+          type: string
+          example: INV-1766422114332
+        subsidiaryId:
+          type: string
+          example: SUB-NB-ENERGIA
+        totalAmount:
+          type: number
+          format: double
+          minimum: 0
+          example: 15000.0
+
+    NfeRecord:
+      type: object
+      additionalProperties: false
+      required:
+        - nfeKey
+        - invoiceId
+        - subsidiaryId
+        - totalAmount
+        - status
+        - issuedAt
+      properties:
+        nfeKey:
+          type: string
+          example: NFe-6f8c1a0e-2d1d-4a2d-b19b-2b74f1a5f3d2
+        invoiceId:
+          type: string
+        subsidiaryId:
+          type: string
+        totalAmount:
+          type: number
+          format: double
+        status:
+          type: string
+          enum:
+            - AUTHORIZED
+            - REJECTED
+            - PENDING
+          example: AUTHORIZED
+        issuedAt:
+          type: string
+          format: date-time

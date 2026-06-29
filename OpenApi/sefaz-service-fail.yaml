@@ -1,0 +1,142 @@
+openapi: 3.0.3
+info:
+  title: Nova Finance - SEFAZ Service (Mock)
+  version: 1.0.0
+servers:
+  - url: http://localhost:9302
+
+tags:
+  - name: SEFAZ
+  - name: Health
+
+paths:
+  /sefaz/nfe:
+    post:
+      tags: [SEFAZ]
+      operationId: issueNfe
+      summary: Issue NF-e for an invoice (may return 503 transiently)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/NfeIssueRequest"
+      responses:
+        "200":
+          description: NF-e authorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NfeRecord"
+        "400":
+          description: Missing required fields / invalid JSON
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "503":
+          description: SEFAZ temporarily unavailable (demo)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /sefaz/nfe/by-invoice/{invoiceId}:
+    get:
+      tags: [SEFAZ]
+      operationId: getNfeByInvoice
+      summary: Get NF-e record by invoice id
+      parameters:
+        - name: invoiceId
+          in: path
+          required: true
+          schema:
+            type: string
+            example: INV-1766422114332
+      responses:
+        "200":
+          description: NF-e record
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NfeRecord"
+        "404":
+          description: NF-e not found for invoice
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /health:
+    get:
+      tags: [Health]
+      operationId: healthSefaz
+      summary: Health check
+      responses:
+        "200":
+          description: Service is up
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+
+components:
+  schemas:
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+          example: SEFAZ temporarily unavailable
+        invoiceId:
+          type: string
+        subsidiaryId:
+          type: string
+        path:
+          type: string
+
+    HealthResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          example: UP
+        service:
+          type: string
+          example: sefaz-service
+
+    NfeIssueRequest:
+      type: object
+      properties:
+        invoiceId:
+          type: string
+          example: INV-1766422114332
+        subsidiaryId:
+          type: string
+          example: SUB-NB-ENERGIA
+        totalAmount:
+          type: number
+          format: double
+          example: 15000.0
+      required: [invoiceId, subsidiaryId]
+
+    NfeRecord:
+      type: object
+      properties:
+        nfeKey:
+          type: string
+          example: NFe-6f8c1a0e-2d1d-4a2d-b19b-2b74f1a5f3d2
+        invoiceId:
+          type: string
+        subsidiaryId:
+          type: string
+        totalAmount:
+          type: number
+          format: double
+        status:
+          type: string
+          example: AUTHORIZED
+        issuedAt:
+          type: string
+          format: date-time
+      required: [nfeKey, invoiceId, subsidiaryId, status, issuedAt]

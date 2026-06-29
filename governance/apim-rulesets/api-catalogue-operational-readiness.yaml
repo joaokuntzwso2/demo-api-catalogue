@@ -1,0 +1,314 @@
+rules:
+  api-category-required:
+    description: APIs must be assigned to at least one APIM category.
+    message: API must have at least one APIM category before it can be deployed or published.
+    severity: error
+    given: $.data
+    then:
+      function: schema
+      functionOptions:
+        schema:
+          type: object
+          required:
+            - categories
+          properties:
+            categories:
+              type: array
+              minItems: 1
+
+  health-enabled-required:
+    description: APIs must declare whether health checks are enabled.
+    message: Missing required custom property health_enabled.
+    severity: error
+    given: $.data
+    then:
+      function: schema
+      functionOptions:
+        schema:
+          type: object
+          anyOf:
+            - required: [additionalPropertiesMap]
+              properties:
+                additionalPropertiesMap:
+                  type: object
+                  required: [health_enabled]
+            - required: [additionalProperties]
+              properties:
+                additionalProperties:
+                  type: array
+                  contains:
+                    type: object
+                    required: [name]
+                    properties:
+                      name:
+                        const: health_enabled
+
+  health-backend-url-required:
+    description: APIs must declare the backend base URL used for health orchestration.
+    message: Missing required custom property health_backend_url.
+    severity: error
+    given: $.data
+    then:
+      function: schema
+      functionOptions:
+        schema:
+          type: object
+          anyOf:
+            - required: [additionalPropertiesMap]
+              properties:
+                additionalPropertiesMap:
+                  type: object
+                  required: [health_backend_url]
+            - required: [additionalProperties]
+              properties:
+                additionalProperties:
+                  type: array
+                  contains:
+                    type: object
+                    required: [name]
+                    properties:
+                      name:
+                        const: health_backend_url
+
+  health-path-required:
+    description: APIs must declare the health path.
+    message: Missing required custom property health_path.
+    severity: error
+    given: $.data
+    then:
+      function: schema
+      functionOptions:
+        schema:
+          type: object
+          anyOf:
+            - required: [additionalPropertiesMap]
+              properties:
+                additionalPropertiesMap:
+                  type: object
+                  required: [health_path]
+            - required: [additionalProperties]
+              properties:
+                additionalProperties:
+                  type: array
+                  contains:
+                    type: object
+                    required: [name]
+                    properties:
+                      name:
+                        const: health_path
+
+  health-method-required:
+    description: APIs must declare the health method.
+    message: Missing required custom property health_method.
+    severity: error
+    given: $.data
+    then:
+      function: schema
+      functionOptions:
+        schema:
+          type: object
+          anyOf:
+            - required: [additionalPropertiesMap]
+              properties:
+                additionalPropertiesMap:
+                  type: object
+                  required: [health_method]
+            - required: [additionalProperties]
+              properties:
+                additionalProperties:
+                  type: array
+                  contains:
+                    type: object
+                    required: [name]
+                    properties:
+                      name:
+                        const: health_method
+
+  health-expected-http-status-required:
+    description: APIs must declare the expected HTTP status for health checks.
+    message: Missing required custom property health_expected_http_status.
+    severity: error
+    given: $.data
+    then:
+      function: schema
+      functionOptions:
+        schema:
+          type: object
+          anyOf:
+            - required: [additionalPropertiesMap]
+              properties:
+                additionalPropertiesMap:
+                  type: object
+                  required: [health_expected_http_status]
+            - required: [additionalProperties]
+              properties:
+                additionalProperties:
+                  type: array
+                  contains:
+                    type: object
+                    required: [name]
+                    properties:
+                      name:
+                        const: health_expected_http_status
+
+  health-expected-payload-json-required:
+    description: APIs must declare the expected health response payload.
+    message: Missing required custom property health_expected_payload_json.
+    severity: error
+    given: $.data
+    then:
+      function: schema
+      functionOptions:
+        schema:
+          type: object
+          anyOf:
+            - required: [additionalPropertiesMap]
+              properties:
+                additionalPropertiesMap:
+                  type: object
+                  required: [health_expected_payload_json]
+            - required: [additionalProperties]
+              properties:
+                additionalProperties:
+                  type: array
+                  contains:
+                    type: object
+                    required: [name]
+                    properties:
+                      name:
+                        const: health_expected_payload_json
+
+  health-required-fields-required:
+    description: APIs must declare required payload fields.
+    message: Missing required custom property health_required_fields.
+    severity: error
+    given: $.data
+    then:
+      function: schema
+      functionOptions:
+        schema:
+          type: object
+          anyOf:
+            - required: [additionalPropertiesMap]
+              properties:
+                additionalPropertiesMap:
+                  type: object
+                  required: [health_required_fields]
+            - required: [additionalProperties]
+              properties:
+                additionalProperties:
+                  type: array
+                  contains:
+                    type: object
+                    required: [name]
+                    properties:
+                      name:
+                        const: health_required_fields
+
+  health-sla-target-required:
+    description: APIs must declare an SLA target.
+    message: Missing required custom property health_sla_target.
+    severity: error
+    given: $.data
+    then:
+      function: schema
+      functionOptions:
+        schema:
+          type: object
+          anyOf:
+            - required: [additionalPropertiesMap]
+              properties:
+                additionalPropertiesMap:
+                  type: object
+                  required: [health_sla_target]
+            - required: [additionalProperties]
+              properties:
+                additionalProperties:
+                  type: array
+                  contains:
+                    type: object
+                    required: [name]
+                    properties:
+                      name:
+                        const: health_sla_target
+
+  health-criticality-required:
+    description: APIs must declare operational criticality.
+    message: Missing required custom property health_criticality.
+    severity: error
+    given: $.data
+    then:
+      function: schema
+      functionOptions:
+        schema:
+          type: object
+          anyOf:
+            - required: [additionalPropertiesMap]
+              properties:
+                additionalPropertiesMap:
+                  type: object
+                  required: [health_criticality]
+            - required: [additionalProperties]
+              properties:
+                additionalProperties:
+                  type: array
+                  contains:
+                    type: object
+                    required: [name]
+                    properties:
+                      name:
+                        const: health_criticality
+
+  health-owner-team-required:
+    description: APIs must declare an owning team.
+    message: Missing required custom property health_owner_team.
+    severity: error
+    given: $.data
+    then:
+      function: schema
+      functionOptions:
+        schema:
+          type: object
+          anyOf:
+            - required: [additionalPropertiesMap]
+              properties:
+                additionalPropertiesMap:
+                  type: object
+                  required: [health_owner_team]
+            - required: [additionalProperties]
+              properties:
+                additionalProperties:
+                  type: array
+                  contains:
+                    type: object
+                    required: [name]
+                    properties:
+                      name:
+                        const: health_owner_team
+
+  health-owner-email-required:
+    description: APIs must declare an owner email.
+    message: Missing required custom property health_owner_email.
+    severity: error
+    given: $.data
+    then:
+      function: schema
+      functionOptions:
+        schema:
+          type: object
+          anyOf:
+            - required: [additionalPropertiesMap]
+              properties:
+                additionalPropertiesMap:
+                  type: object
+                  required: [health_owner_email]
+            - required: [additionalProperties]
+              properties:
+                additionalProperties:
+                  type: array
+                  contains:
+                    type: object
+                    required: [name]
+                    properties:
+                      name:
+                        const: health_owner_email

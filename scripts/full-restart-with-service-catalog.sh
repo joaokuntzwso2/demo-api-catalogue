@@ -80,6 +80,8 @@ SERVICE_CATALOG_MI_HOST=wso2-integrator \
 SERVICE_CATALOG_MI_PORT=8290 \
 perl -e 'alarm 90; exec @ARGV' npm run platform:categories:bootstrap || echo 'API categories bootstrap skipped/timed out; continuing demo startup.'
 
+perl -e 'alarm 120; exec @ARGV' npm run platform:governance:bootstrap || echo 'APIM governance bootstrap skipped/timed out; continuing demo startup.'
+
 npm run platform:service-catalog:bootstrap
 
 echo
