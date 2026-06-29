@@ -55,6 +55,88 @@ The UI reads operational state; it never executes probes.
 
 ---
 
+
+## Current final architecture and demo flow
+
+The current implementation uses **WSO2 API Manager as the active source of truth** and uses the **Developer Portal subscription model** to decide what appears in the catalogue UI.
+
+The final runtime flow is:
+
+```text
+Fresh platform restart
+  ↓
+APIM, MI, cache, platform-control, UI and mocked APIs start
+  ↓
+APIM API categories are preloaded
+  ↓
+Service Catalog bootstrap runs best-effort
+  ↓
+UI opens empty
+  ↓
+User manually onboards APIs from the UI
+  ↓
+API is imported/published in APIM
+  ↓
+API is assigned an APIM API Category
+  ↓
+API is subscribed to API Catalogue Application in DevPortal
+  ↓
+Fresh APIM Gateway revision is created and deployed
+  ↓
+Runtime OAuth token is regenerated for the subscribed API set
+  ↓
+MI artifacts are generated from APIM + DevPortal state
+  ↓
+MI invokes the APIM Gateway, not the raw backend
+  ↓
+health-status-cache stores the result
+  ↓
+UI displays the APIM/DevPortal-governed view
+```
+
+Important current rules:
+
+```text
+Fresh restart does not import APIs.
+Fresh restart does not publish APIs.
+Fresh restart does not subscribe APIs.
+Fresh restart does preload APIM API Categories.
+Fresh restart does clear stale Gateway token cache.
+Fresh restart leaves the UI empty.
+Manual onboarding is the action that makes APIs appear.
+```
+
+The UI should therefore be empty immediately after:
+
+```bash
+./scripts/full-restart-with-service-catalog.sh
+```
+
+Validate:
+
+```bash
+curl -s http://localhost:6400/api/catalogue-status/apis | jq .
+```
+
+Expected before manual onboarding:
+
+```json
+[]
+```
+
+After manual onboarding and sync/evaluate, expected rows contain:
+
+```text
+domain/category from APIM API Category
+runtime from APIM/DevPortal Gateway environment
+liveness from APIM Gateway invocation
+contract from APIM Gateway payload validation
+healthBrowserUrl from APIM published HTTPS endpoint
+secureHealthInvokeUrl from platform-control OAuth proxy
+```
+
+---
+
 ## Demo capabilities
 
 The repository demonstrates:
@@ -106,37 +188,69 @@ The repository demonstrates:
 ---
 
 ## Important behavior
+The UI intentionally does **not** execute live health probes as a side effect of browser refresh or catalogue reads.
 
-The UI intentionally does **not** trigger health checks.
-
-The UI reads only cached status:
+The UI reads the governed status model through `platform-control`:
 
 ```text
 Catalogue UI
-  → /catalogue-status/v1/apis
-  → WSO2 Integrator status API
-  → health-status-cache
-  → latest known MI readings
+  → platform-control /api/catalogue-status/apis
+  → APIM Publisher metadata
+  → APIM Developer Portal subscriptions
+  → APIM Gateway deployment metadata
+  → MI/cache operational state
+  → health-status-cache latest readings
 ```
 
-The actual probes are executed only by WSO2 Integrator scheduled tasks:
+The actual API health checks are executed by WSO2 Integrator / Micro Integrator:
 
 ```text
-MI scheduled task
+MI scheduled task or explicit operator probe
   → generated tier orchestration sequence
   → generated per-API check sequence
-  → mocked backend /health endpoint
+  → APIM Gateway endpoint
+  → APIM subscription/auth validation
+  → mocked backend
+  → response payload validation
   → health-status-cache
 ```
 
-Manual full-probe execution is disabled by design:
+The current demo **does support an explicit operator-triggered probe**:
 
-```text
-POST /health-registry/v1/probes/run
-  → HTTP 409 Conflict
+```bash
+npm run platform:probe
 ```
 
-This prevents browser refreshes, manual curl calls or old UI code from forcing all APIs to be checked at the same time.
+or directly:
+
+```bash
+curl -s -X POST http://localhost:8290/health-registry/v1/probes/run | jq .
+```
+
+Expected:
+
+```json
+{
+  "status": "COMPLETED",
+  "message": "Manual full probe execution completed",
+  "source": "health-registry-api"
+}
+```
+
+This is different from a UI refresh. The UI remains a read model. Manual probe execution is an intentional operator/demo action.
+
+The UI also exposes a clickable APIM health URL in the side panel. Because a normal browser link cannot attach an OAuth bearer token, the link opens a local `platform-control` proxy route:
+
+```text
+Displayed URL:
+  https://localhost:8243/cards/v1/1.0.0/health
+
+Clicked URL:
+  http://localhost:6400/api/gateway/invoke?apiName=cards-api&target=health
+
+platform-control then calls APIM Gateway with:
+  Authorization: Bearer <runtime application token>
+```
 
 ---
 
@@ -158,7 +272,6 @@ This is intentional. A healthy APIM node does not guarantee that every API is de
 ---
 
 ## Runtime components
-
 | Component | Purpose | URL / Port |
 | --- | --- | --- |
 | Accounts API | Mocked banking API | `http://localhost:5101/accounts/v1` |
@@ -166,15 +279,17 @@ This is intentional. A healthy APIM node does not guarantee that every API is de
 | Customers API | Mocked banking API | `http://localhost:5103/customers/v1` |
 | Cards API | Mocked banking API | `http://localhost:5104/cards/v1` |
 | Loans API | Mocked banking API | `http://localhost:5105/loans/v1` |
-| WSO2 API Manager Publisher | API lifecycle and publishing | `https://localhost:9443/publisher` |
-| WSO2 API Manager Developer Portal | API discovery and subscription | `https://localhost:9443/devportal` |
+| WSO2 API Manager Publisher | API lifecycle, API categories, deployment and publishing | `https://localhost:9443/publisher` |
+| WSO2 API Manager Developer Portal | API discovery, application and subscriptions | `https://localhost:9443/devportal` |
 | WSO2 API Manager Carbon Console | Admin console | `https://localhost:9443/carbon` |
-| WSO2 API Gateway | Managed API runtime endpoint | `https://localhost:8243` |
+| APIM Gateway HTTPS | DevPortal-aligned published API endpoint | `https://localhost:8243` |
+| APIM Gateway HTTP | Docker-internal MI invocation path | `http://wso2-apim:8280` |
 | WSO2 Integrator Health Registry API | APIM-sourced health registry metadata | `http://localhost:8290/health-registry/v1/apis` |
 | WSO2 Integrator Catalogue Status API | Cached status exposed through MI | `http://localhost:8290/catalogue-status/v1/apis` |
 | WSO2 Integrator Platform Status API | MI-level platform status endpoint | `http://localhost:8290/platform-status/v1/health` |
 | WSO2 Integrator Customer 360 API | Composite integration API | `http://localhost:8290/customer-360/v1/customers/{customerId}` |
 | Health Status Cache | Latest status, history and SLA-style windows | `http://localhost:6300` |
+| Platform Control | UI orchestration, DevPortal-backed catalogue, secure Gateway invoke proxy | `http://localhost:6400` |
 | Catalogue UI | Demo UI | `http://localhost:5174` |
 | Optional OpenTelemetry Collector | Local observability profile | `localhost:4317`, `localhost:4318` |
 
@@ -182,6 +297,14 @@ Default credentials:
 
 ```text
 admin / admin
+```
+
+Gateway URL rule:
+
+```text
+MI checks use:       http://wso2-apim:8280
+UI display uses:    https://localhost:8243
+UI click uses:      http://localhost:6400/api/gateway/invoke?... 
 ```
 
 ---
@@ -313,15 +436,106 @@ http://localhost:5174
 
 ---
 
-## API Manager health metadata
 
+## APIM API Categories and UI Domain
+
+
+APIM API Categories are the source of truth for the UI `Domain` field.
+
+The platform preloads these categories when APIM starts:
+
+```text
+Accounts
+Cards
+Customers
+Payments
+Loans
+```
+
+The category bootstrap script is:
+
+```bash
+npm run platform:categories:bootstrap
+```
+
+Each APICTL API project should include the API category in `api.yaml`:
+
+```yaml
+categories:
+  - Cards
+```
+
+Expected mapping:
+
+| API | APIM Category | UI Domain |
+| --- | --- | --- |
+| `accounts-api` | `Accounts` | `Accounts` |
+| `cards-api` | `Cards` | `Cards` |
+| `customers-api` | `Customers` | `Customers` |
+| `payments-api` | `Payments` | `Payments` |
+| `loans-api` | `Loans` | `Loans` |
+
+Existing APIs can be corrected after import using:
+
+```bash
+npm run platform:set-api-categories
+```
+
+The post-onboard reconciliation also runs category bootstrap and category assignment before creating the fresh Gateway revision.
+
+Validate the effective UI data:
+
+```bash
+curl -s http://localhost:6400/api/catalogue-status/apis \
+  | jq '.[] | {
+    name,
+    domain,
+    category,
+    categories,
+    runtime
+  }'
+```
+
+Expected:
+
+```json
+{
+  "name": "cards-api",
+  "domain": "Cards",
+  "category": "Cards",
+  "categories": ["Cards"],
+  "runtime": "Default / localhost"
+}
+```
+
+If category assignment fails with `The API category is invalid`, run:
+
+```bash
+npm run platform:categories:bootstrap
+npm run platform:set-api-categories
+npm run platform:post-onboard
+```
+
+---
+
+## API Manager health metadata
 Each APICTL API project contains an `api.yaml`.
 
-The `api.yaml` contains APIM custom properties under `additionalProperties`.
+The API contract contains two different metadata families:
 
-These properties define the health strategy that WSO2 Integrator will execute after APIM-to-MI reconciliation.
+1. **APIM-native metadata**, such as `categories`, lifecycle, context, version and Gateway deployment metadata.
+2. **Demo health strategy metadata**, stored under `additionalProperties`, used by MI to generate APIM Gateway liveness and contract checks.
 
-Example:
+The preferred model for business grouping is APIM API Categories:
+
+```yaml
+categories:
+  - Accounts
+```
+
+The old `health_domain` property can remain as a legacy fallback, but it is no longer the preferred source for the UI Domain column.
+
+Example health strategy metadata:
 
 ```yaml
 additionalProperties:
@@ -351,12 +565,6 @@ additionalProperties:
     display: true
   - name: health_criticality
     value: "Tier 0"
-    display: true
-  - name: health_runtime
-    value: "Kubernetes"
-    display: true
-  - name: health_domain
-    value: "Retail Banking"
     display: true
   - name: health_owner_team
     value: "Accounts Platform Team"
@@ -395,11 +603,17 @@ Recommended extended catalogue metadata:
     display: true
 ```
 
+Runtime and Domain values in the UI are now intentionally APIM/DevPortal-backed:
+
+```text
+Domain  = APIM API Category
+Runtime = APIM/DevPortal Gateway environment
+```
+
 ---
 
 ## Required metadata
-
-The local governance script validates required APIM custom properties before import.
+The local governance script validates required API metadata before import.
 
 Required health metadata:
 
@@ -413,10 +627,21 @@ health_expected_payload_json
 health_required_fields
 health_sla_target
 health_criticality
-health_runtime
-health_domain
 health_owner_team
 health_owner_email
+```
+
+Required APIM-native metadata:
+
+```text
+categories
+```
+
+`health_domain` and `health_runtime` are no longer preferred as the UI source of truth. They may remain as fallback or legacy metadata, but the current UI should resolve:
+
+```text
+Domain  → APIM API Category
+Runtime → APIM/DevPortal Gateway environment
 ```
 
 Recommended production governance rules:
@@ -424,7 +649,8 @@ Recommended production governance rules:
 | Rule | Blocking for demo |
 | --- | --- |
 | API has valid OpenAPI definition | Yes |
-| API has health strategy | Yes |
+| API has APIM API Category | Yes |
+| API has valid health strategy | Yes |
 | API has criticality | Yes |
 | API has owner team and email | Yes |
 | API has SLA target | Yes |
@@ -486,6 +712,54 @@ wso2-integrator/catalogue-health-mi/src/main/wso2mi/artifacts/apis/customer_360_
 wso2-integrator/catalogue-health-mi/src/main/wso2mi/artifacts/apis/platform_status_api.xml
 wso2-integrator/catalogue-health-mi/src/main/wso2mi/resources/service-catalog/customer_360_openapi.yaml
 wso2-integrator/catalogue-health-mi/src/main/wso2mi/resources/service-catalog/customer_360_service.yaml
+```
+
+---
+
+
+## APIM Gateway invocation model
+
+MI performs liveness and contract validation through APIM Gateway.
+
+For MI-generated checks, the internal Gateway URL is HTTP:
+
+```text
+http://wso2-apim:8280/<context>/<version>/<resource>
+```
+
+This is intentional because MI runs inside Docker and the local APIM certificate is issued for `localhost`, not `wso2-apim`.
+
+For user-facing display, the UI shows the DevPortal-aligned HTTPS Gateway URL:
+
+```text
+https://localhost:8243/<context>/<version>/health
+```
+
+Clicking that URL in the UI opens the secure platform-control route:
+
+```text
+http://localhost:6400/api/gateway/invoke?apiName=<api-name>&target=health
+```
+
+`platform-control` injects the OAuth token and calls APIM Gateway securely.
+
+Direct validation with the current runtime token:
+
+```bash
+TOKEN="$(jq -r .accessToken .runtime/api-catalogue-gateway-token.json)"
+
+curl -k -i -s \
+  -H "Authorization: Bearer $TOKEN" \
+  https://localhost:8243/cards/v1/1.0.0/health | head -60
+```
+
+Docker-internal validation:
+
+```bash
+TOKEN="$(jq -r .accessToken .runtime/api-catalogue-gateway-token.json)"
+
+docker-compose --profile platform run --rm -e TOKEN="$TOKEN" apictl \
+  "curl -i -s -H \"Authorization: Bearer \\$TOKEN\" http://wso2-apim:8280/cards/v1/1.0.0/health | head -60"
 ```
 
 ---
@@ -691,52 +965,68 @@ npm install
 ---
 
 ## Expected package scripts
-
-The onboarding commands should import APIs and perform one one-shot reconciliation automatically.
+The current script model separates platform startup from API onboarding.
 
 Important behavior:
 
 ```text
-platform:onboard:* = import into APIM + reconcile once + recreate MI/UI once + stop
+full-restart-with-service-catalog.sh
+  = infrastructure startup only + category bootstrap + Service Catalog bootstrap
+  = no automatic API import
+  = no automatic API publish
+  = no automatic API subscription
+
+platform:post-onboard
+  = reconcile onboarded APIs after manual onboarding
+  = category bootstrap
+  = API category assignment
+  = operation auth update
+  = fresh Gateway revision
+  = Gateway token regeneration
+  = MI artifact generation
+  = MI/UI recreate
+  = explicit probe
 ```
 
-Do not keep a continuous watcher running during tier timing tests.
+Important scripts:
 
-Recommended `scripts` block entries:
-
-```json
-{
-  "platform:up": "docker-compose --profile platform up -d --build",
-  "platform:down": "docker-compose --profile platform down -v --remove-orphans",
-
-  "platform:import:all": "docker-compose --profile platform run --rm -e APIM_ALLOW_INSECURE_TLS=true apictl \"bash pipeline/scripts/deploy-all-to-apim.sh\"",
-  "platform:import:initial3": "docker-compose --profile platform run --rm -e APIM_ALLOW_INSECURE_TLS=true apictl \"bash pipeline/scripts/deploy-initial-3-to-apim.sh\"",
-  "platform:import:cards": "docker-compose --profile platform run --rm -e APIM_ALLOW_INSECURE_TLS=true apictl \"bash pipeline/scripts/deploy-cards-later-to-apim.sh\"",
-  "platform:import:loans": "docker-compose --profile platform run --rm -e APIM_ALLOW_INSECURE_TLS=true apictl \"bash pipeline/scripts/deploy-loans-later-to-apim.sh\"",
-
-  "platform:reconcile-once": "docker-compose --profile platform run --rm -e APIM_ALLOW_INSECURE_TLS=true apictl \"node pipeline/scripts/sync-mi-health-from-apim.js\" && docker-compose --profile platform up -d --force-recreate wso2-integrator ui-platform",
-
-  "platform:onboard": "npm run platform:import:all && npm run platform:reconcile-once",
-  "platform:onboard:initial3": "npm run platform:import:initial3 && npm run platform:reconcile-once",
-  "platform:onboard:cards": "npm run platform:import:cards && npm run platform:reconcile-once",
-  "platform:onboard:loans": "npm run platform:import:loans && npm run platform:reconcile-once",
-
-  "platform:sync-health": "npm run platform:reconcile-once",
-  "platform:watch-sync": "echo 'Do not use platform:watch-sync during tier timing tests. Use platform:onboard:* or platform:reconcile-once instead.'",
-
-  "platform:governance:check": "node pipeline/scripts/enhanced-governance-check.js apictl/apis/*",
-  "platform:governance:dry-run:accounts": "docker-compose --profile platform run --rm -e APIM_ALLOW_INSECURE_TLS=true apictl \"bash pipeline/scripts/apictl-governance-dry-run.sh apictl/apis/accounts-api\"",
-  "platform:readiness": "node pipeline/scripts/apim-platform-readiness.js",
-  "platform:subscribe:accounts": "node pipeline/scripts/devportal-subscribe-and-invoke.js accounts-api /accounts/v1/health",
-  "platform:history": "curl http://localhost:6300/cache/history | jq",
-  "platform:sla:accounts": "curl 'http://localhost:6300/cache/sla?api=accounts-api&window=30d' | jq",
-  "platform:sla:breaches": "curl 'http://localhost:6300/cache/sla/breaches?window=30d' | jq",
-
-  "platform:apictl": "docker-compose --profile platform run --rm apictl \"apictl version\"",
-  "platform:logs:apim": "docker-compose --profile platform logs -f wso2-apim",
-  "platform:logs:integrator": "docker-compose --profile platform logs -f wso2-integrator"
-}
+```bash
+npm run platform:up
+npm run platform:down
+npm run platform:categories:bootstrap
+npm run platform:set-api-categories
+npm run platform:service-catalog:bootstrap
+npm run platform:import:all
+npm run platform:reconcile-once
+npm run platform:post-onboard
+npm run platform:probe
+npm run platform:status:apis
+npm run platform:governance:check
+npm run platform:control:start
+npm run platform:control:stop
 ```
+
+The reconciliation container should execute in this order:
+
+```text
+rm -f .runtime/api-catalogue-gateway-token.json
+node pipeline/scripts/bootstrap-api-categories.js
+node pipeline/scripts/set-api-operation-auth-application.js
+node pipeline/scripts/set-api-categories.js
+node pipeline/scripts/force-fresh-gateway-revision.js
+APIM_GATEWAY_INTERNAL_BASE_URL=http://wso2-apim:8280 \
+APIM_GATEWAY_BROWSER_BASE_URL=http://localhost:8280 \
+node pipeline/scripts/sync-mi-health-from-apim.js
+```
+
+Validate the current local scripts:
+
+```bash
+cat package.json | jq -r '.scripts["platform:reconcile:container"]'
+cat package.json | jq -r '.scripts["platform:post-onboard"]'
+```
+
+The older `platform:onboard:*` commands can still be kept for terminal-driven demos, but the current preferred story is manual onboarding from the UI followed by sync/evaluate.
 
 ---
 
@@ -837,12 +1127,59 @@ docker network ls | grep wso2-api-catalogue-demo || echo "No project network lef
 ---
 
 ## Start the platform
+For the final demo flow, use the full restart script:
+
+```bash
+./scripts/full-restart-with-service-catalog.sh
+```
+
+The script should:
+
+```text
+clear stale Gateway runtime token
+start/restart APIM, MI, cache, mocks, UI and platform-control
+wait for APIM readiness
+preload APIM API Categories
+bootstrap Service Catalog best-effort
+leave the catalogue empty
+```
+
+It should **not** call:
+
+```text
+platform:onboard
+platform:import:all
+platform:post-onboard
+platform:reconcile-once
+```
+
+Audit the restart script:
+
+```bash
+grep -n "platform:categories:bootstrap\|platform:service-catalog:bootstrap\|platform:onboard\|platform:import:all\|platform:post-onboard\|platform:reconcile-once\|api-catalogue-gateway-token" \
+  scripts/full-restart-with-service-catalog.sh
+```
+
+Before manual onboarding, validate empty UI state:
+
+```bash
+curl -s http://localhost:6400/api/catalogue-status/apis | jq .
+```
+
+Expected:
+
+```json
+[]
+```
+
+You can still use lower-level startup commands for debugging:
 
 ```bash
 npm run platform:up
+npm run platform:control:start
 ```
 
-Wait for WSO2 API Manager:
+Wait for WSO2 API Manager manually if needed:
 
 ```bash
 until curl -ksf https://localhost:9443/carbon >/dev/null; do
@@ -852,33 +1189,6 @@ done
 
 echo "WSO2 API Manager is ready"
 ```
-
-Check containers:
-
-```bash
-docker-compose --profile platform ps
-```
-
-Validate cache:
-
-```bash
-curl http://localhost:6300/health | jq
-curl http://localhost:6300/cache/results | jq
-```
-
-For a clean start, the cache should be empty:
-
-```json
-[]
-```
-
-Open the UI:
-
-```text
-http://localhost:5174
-```
-
-For a clean start, the UI should be empty until APIs are onboarded and MI scheduled tasks populate the cache.
 
 ---
 
@@ -902,6 +1212,67 @@ For APIM gateway startup readiness, use the APIM gateway health-check endpoint w
 
 ```bash
 curl -k https://localhost:9443/api/am/gateway/v2/server-startup-healthcheck
+```
+
+---
+
+
+## Manual UI onboarding flow
+
+Open:
+
+```text
+http://localhost:5174
+```
+
+Use the onboarding panel to select and onboard an API.
+
+Then click:
+
+```text
+Sync assinaturas & avaliar
+```
+
+Expected result:
+
+```text
+API imported/published in APIM
+APIM Category applied
+API subscribed to API Catalogue Application
+fresh Gateway revision deployed
+runtime OAuth token regenerated
+MI artifacts regenerated
+MI restarted
+probe executed
+UI row turns GREEN when liveness and contract pass
+```
+
+Validate after onboarding:
+
+```bash
+curl -s http://localhost:6400/api/catalogue-status/apis \
+  | jq '.[] | {
+    name,
+    domain,
+    category,
+    categories,
+    runtime,
+    consumerStatus,
+    liveness: .liveness.status,
+    contract: .contract.status,
+    healthBrowserUrl,
+    secureHealthInvokeUrl
+  }'
+```
+
+Expected:
+
+```text
+Domain/category from APIM Category
+Runtime from APIM Gateway environment
+Health URL from APIM HTTPS Gateway
+Liveness checked through APIM Gateway
+Contract checked through APIM Gateway
 ```
 
 ---
@@ -957,7 +1328,7 @@ Expected:
 "payments-api"
 ```
 
-Confirm manual full probes are disabled:
+Confirm an explicit manual full probe works:
 
 ```bash
 curl -i -X POST http://localhost:8290/health-registry/v1/probes/run
@@ -965,8 +1336,12 @@ curl -i -X POST http://localhost:8290/health-registry/v1/probes/run
 
 Expected:
 
-```text
-HTTP/1.1 409 Conflict
+```json
+{
+  "status": "COMPLETED",
+  "message": "Manual full probe execution completed",
+  "source": "health-registry-api"
+}
 ```
 
 Wait for scheduled MI tasks to populate cache:
@@ -1316,13 +1691,7 @@ npm run platform:reconcile-once
 docker-compose --profile platform up -d --force-recreate wso2-integrator
 ```
 
-Do not call:
-
-```bash
-curl -X POST http://localhost:8290/health-registry/v1/probes/run
-```
-
-It is disabled and should return HTTP 409.
+Do not call the manual probe while validating tier timing, because it intentionally runs all checks immediately and will distort timing observations.
 
 Use this macOS-compatible loop:
 
@@ -1393,7 +1762,7 @@ If `/health` calls appear at their tier interval, that is expected. Those are MI
 
 ## Health behavior testing
 
-Because manual full-probe execution is disabled, wait for the next scheduled MI task after changing a backend mode.
+For timing demonstrations, wait for the next scheduled MI task after changing a backend mode. For quick functional validation, you may explicitly run `npm run platform:probe`.
 
 For `accounts-api`, wait up to 60 seconds because it is Tier 0.
 
@@ -1509,6 +1878,36 @@ The SLA model is sample-based for the demo. In production, send gateway traffic 
 
 ---
 
+
+## Platform-control endpoints
+
+`platform-control` runs on the host at:
+
+```text
+http://localhost:6400
+```
+
+Important routes:
+
+| Endpoint | Description |
+| --- | --- |
+| `GET /api/catalogue-status/apis` | APIM/DevPortal-enriched catalogue rows for the UI |
+| `GET /api/catalogue-status/summary` | Summary for UI |
+| `POST /api/catalogue-sync/run` | Sync/evaluate flow used by the UI |
+| `GET /api/catalogue-sync/status` | Sync/evaluate status |
+| `GET /api/gateway/invoke?apiName=<name>&target=health` | Secure APIM Gateway invoke with OAuth token injection |
+
+The side-panel health link displays the APIM published HTTPS Gateway URL, but opens the secure platform-control route because browsers cannot add the runtime OAuth bearer token to a normal link.
+
+Validate:
+
+```bash
+curl -s http://localhost:6400/api/catalogue-status/apis | jq
+curl -k -i -s "http://localhost:6400/api/gateway/invoke?apiName=cards-api&target=health" | head -60
+```
+
+---
+
 ## Direct validation endpoints
 
 ### Health registry from MI
@@ -1567,8 +1966,12 @@ curl -i -X POST http://localhost:8290/health-registry/v1/probes/run
 
 Expected:
 
-```text
-HTTP/1.1 409 Conflict
+```json
+{
+  "status": "COMPLETED",
+  "message": "Manual full probe execution completed",
+  "source": "health-registry-api"
+}
 ```
 
 ---
@@ -1711,7 +2114,7 @@ GET  /customer-360/v1/health
 Important:
 
 ```text
-POST /health-registry/v1/probes/run returns HTTP 409 by design.
+POST /health-registry/v1/probes/run runs an explicit operator-triggered full probe. UI reads do not call it.
 ```
 
 Examples:
@@ -1901,6 +2304,85 @@ docker-compose --profile platform build --no-cache apictl
 ---
 
 ## Troubleshooting
+
+
+### API category is invalid
+
+If category assignment fails with:
+
+```text
+The API category is invalid
+```
+
+APIM does not yet have the category registered at platform level.
+
+Run:
+
+```bash
+npm run platform:categories:bootstrap
+npm run platform:set-api-categories
+npm run platform:post-onboard
+```
+
+### Liveness is RED with Unsupported Transport
+
+If the APIM response says:
+
+```text
+Unsupported Transport [ http ]
+```
+
+then the deployed Gateway revision is stale or HTTPS-only.
+
+Run:
+
+```bash
+npm run platform:post-onboard
+```
+
+The current post-onboard flow creates a fresh Gateway revision.
+
+### Liveness is RED with subscription validation failed
+
+If APIM returns:
+
+```text
+API Subscription validation failed
+```
+
+then the runtime token may have been generated before the API was subscribed.
+
+Run:
+
+```bash
+rm -f .runtime/api-catalogue-gateway-token.json
+npm run platform:post-onboard
+```
+
+### platform-control secure invoke returns `fetch failed`
+
+`platform-control` runs on the host. Its secure Gateway proxy should call APIM through localhost:
+
+```text
+https://localhost:8243
+```
+
+It should not use Docker DNS such as:
+
+```text
+http://wso2-apim:8280
+```
+
+### Maximum number of API revisions reached
+
+The post-onboard flow uses `force-fresh-gateway-revision.js` to undeploy/delete old revisions and deploy a fresh one.
+
+Run:
+
+```bash
+npm run platform:post-onboard
+```
+
 
 ### UI starts with APIs already displayed
 
@@ -2104,5 +2586,6 @@ This demonstrates a governed, production-style API catalogue modernization patte
 * CI/CD-driven API governance with APICTL dry-run: `https://apim.docs.wso2.com/en/4.7.0/administer/governance/api-governance-cicd/`
 * Publishing Integrator services to API Manager Service Catalog: `https://apim.docs.wso2.com/en/4.7.0/integrate/develop/working-with-service-catalog/`
 * API Product overview: `https://apim.docs.wso2.com/en/4.7.0/api-design-manage/design/create-api-product/api-product-overview/`
+* API category-based grouping: `https://apim.docs.wso2.com/en/4.7.0/reference/customize-product/customizations/customizing-the-developer-portal/customize-api-listing/api-category-based-grouping/`
 * API Manager basic and gateway startup health checks: `https://apim.docs.wso2.com/en/4.7.0/install-and-setup/setup/deployment-best-practices/basic-health-checks/`
 * Datadog analytics installation guide for API Manager: `https://apim.docs.wso2.com/en/4.7.0/monitoring/api-analytics/on-prem/datadog-installation-guide/`
