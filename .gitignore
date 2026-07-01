@@ -50,3 +50,9 @@ wso2-integrator/catalogue-health-mi/src/main/wso2mi/artifacts/apis/health_regist
 
 # Local demo runtime overrides
 .runtime/
+
+# Runtime / generated demo artifacts
+.pids/
+.backups/
+.tmp-service-catalog-import/
+.tmp-service-catalog-import.zip

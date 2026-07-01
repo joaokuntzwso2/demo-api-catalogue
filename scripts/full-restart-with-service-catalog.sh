@@ -35,14 +35,9 @@ docker volume rm $(docker volume ls -q | grep -E "demo-api-catalogue|health-cach
 
 echo
 echo "5. Removing generated MI health artifacts..."
-rm -f wso2-integrator/catalogue-health-mi/src/main/wso2mi/artifacts/sequences/check_*.xml
-rm -f wso2-integrator/catalogue-health-mi/src/main/wso2mi/artifacts/sequences/run_all_health_checks.xml
-rm -f wso2-integrator/catalogue-health-mi/src/main/wso2mi/artifacts/sequences/run_tier*_health_checks.xml
-rm -f wso2-integrator/catalogue-health-mi/src/main/wso2mi/artifacts/tasks/scheduled_health_check.xml
-rm -f wso2-integrator/catalogue-health-mi/src/main/wso2mi/artifacts/tasks/scheduled_tier*_health_check.xml
-rm -f wso2-integrator/catalogue-health-mi/src/main/wso2mi/artifacts/apis/health_registry_api.xml
 
-echo
+bash pipeline/scripts/clean-generated-mi-artifacts.sh
+
 echo "6. Installing dependencies..."
 npm install
 
@@ -89,7 +84,8 @@ echo "12. Verifying Service Catalog entries..."
 npm run platform:service-catalog:list
 
 echo
-echo "13. Starting local UI onboarding control server..."
+echo "13. Restarting local UI onboarding control server..."
+npm run platform:control:stop || true
 npm run platform:control:start
 
 echo
@@ -105,10 +101,5 @@ echo "  Control API:http://localhost:6400"
 echo
 echo "Credentials:"
 echo "  admin / admin"
-
-echo
-echo "Restarting platform-control so cached APIM/DevPortal tokens are refreshed..."
-npm run platform:control:stop || true
-npm run platform:control:start
 
 echo
